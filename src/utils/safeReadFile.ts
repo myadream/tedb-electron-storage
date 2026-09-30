@@ -1,11 +1,16 @@
 import {readFile} from 'graceful-fs';
-const os = require('os');
 
 export interface IsafeReadFileOptions {
-    encoding?: string | null;
+    encoding?: BufferEncoding | null;
     flag?: string;
 }
 
+/**
+ * Read a file, resolving `false` only when the file does not exist.
+ * Any other error (EACCES, EISDIR, ...) is rejected so callers can
+ * distinguish "missing" from "unreadable" — the old implementation
+ * silently reported every error on non-darwin platforms as "missing".
+ */
 export const safeReadFile = (path: string, options?: IsafeReadFileOptions): Promise<any> => {
     return new Promise((resolve, reject) => {
         const Options: IsafeReadFileOptions = {};
@@ -13,27 +18,19 @@ export const safeReadFile = (path: string, options?: IsafeReadFileOptions): Prom
             Options.encoding = 'utf8';
             Options.flag = 'r';
         } else {
-            if (!options.encoding) {
-                Options.encoding = 'utf8';
-            }
-            if (!options.flag) {
-                Options.flag = 'r';
-            }
+            // keep caller-provided values, default only the missing ones
+            Options.encoding = options.encoding || 'utf8';
+            Options.flag = options.flag || 'r';
         }
         readFile(path, Options, (err: any, data: string | Buffer) => {
             if (err) {
-                if (os.platform() === 'darwin') {
-                    if (err.errno === -2 && err.code === 'ENOENT' && err.syscall === 'open') {
-                        resolve(false);
-                    } else {
-                        return reject(err);
-                    }
-                } else {
+                if (err.code === 'ENOENT') {
                     resolve(false);
+                } else {
+                    return reject(new Error(':::Storage::: safeReadFile Error. ' + err.message));
                 }
             } else {
-                data = data as string;
-                resolve(data);
+                resolve(data as string);
             }
         });
     });

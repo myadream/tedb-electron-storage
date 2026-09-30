@@ -4,7 +4,6 @@ export interface IFlushStorageOptions {
     filename: string;
     isDir: boolean;
 }
-const win64: any = 'win64';
 
 export const FlushStorage = (options: string | IFlushStorageOptions): Promise<null> => {
     return new Promise((resolve, reject) => {
@@ -19,8 +18,8 @@ export const FlushStorage = (options: string | IFlushStorageOptions): Promise<nu
             flags = options.isDir ? 'r' : 'r+';
         }
 
-        if (flags === 'r' && (process.platform === 'win32' || process.platform === win64)) {
-            return resolve();
+        if (flags === 'r' && process.platform === 'win32') {
+            return resolve(null);
         }
 
         let fileDesc: number;
@@ -35,7 +34,7 @@ export const FlushStorage = (options: string | IFlushStorageOptions): Promise<nu
             })
             .then((res): Promise<null> => {
                 if (res === false) {
-                    return new Promise((r) => r());
+                    return new Promise((r) => r(null));
                 } else {
                     return CloseFile(fileDesc);
                 }

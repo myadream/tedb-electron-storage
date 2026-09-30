@@ -1,5 +1,5 @@
-import {IStorageDriverExtended} from '../types';
-import {SafeWrite, MakeVersionDirPast, stringifyJSON, EnsureDataFile, CopyAndWrite, WriteNewPastandBase, safeReadFile, safeDirExists, MakeDir} from '../utils';
+import {IStorageDriverExtended, TDurability} from '../types';
+import {SafeWrite, MakeVersionDirPast, stringifyJSON, CopyAndWrite, WriteNewPastandBase, safeReadFile, safeDirExists, MakeDir} from '../utils';
 const path = require('path');
 
 /**
@@ -10,7 +10,7 @@ const path = require('path');
  * @param returnMany
  * @returns {Promise<any>}
  */
-const checkNext = (fileLocation: string, baseLocation: string, data: string, returnMany: any) => {
+const checkNext = (fileLocation: string, baseLocation: string, data: string, returnMany: any, durability: TDurability) => {
     return new Promise((resolve, reject) => {
         return safeDirExists(fileLocation)
             .then((bool) => {
@@ -19,7 +19,7 @@ const checkNext = (fileLocation: string, baseLocation: string, data: string, ret
                     return MakeVersionDirPast(fileLocation, returnMany, data);
                 } else {
                     // the backup directory exists
-                    return WriteNewPastandBase(fileLocation, returnMany, baseLocation, data);
+                    return WriteNewPastandBase(fileLocation, returnMany, baseLocation, data, durability);
                 }
             })
             .then(resolve)
@@ -28,24 +28,24 @@ const checkNext = (fileLocation: string, baseLocation: string, data: string, ret
 };
 
 // also used in StoreIndex
-export const makeDirCopy = (base: string, dir: string, data: any): Promise<any> => {
+export const makeDirCopy = (base: string, dir: string, data: any, durability: TDurability = 'strict'): Promise<any> => {
     return new Promise((resolve, reject) => {
         return MakeDir(dir)
-            .then(() => CopyAndWrite(base, path.join(dir, 'past'), data))
+            .then(() => CopyAndWrite(base, path.join(dir, 'past'), data, durability))
             .then(resolve)
             .catch(reject);
     });
 };
 
 // also used in StoreIndex
-export const backupDirWrite = (base: string, dir: string, data: any): Promise<any> => {
+export const backupDirWrite = (base: string, dir: string, data: any, durability: TDurability = 'strict'): Promise<any> => {
     return new Promise((resolve, reject) => {
         return safeDirExists(dir)
             .then((bool) => {
                 if (bool === false) {
-                    return makeDirCopy(base, dir, data);
+                    return makeDirCopy(base, dir, data, durability);
                 } else {
-                    return CopyAndWrite(base, path.join(dir, 'past'), data);
+                    return CopyAndWrite(base, path.join(dir, 'past'), data, durability);
                 }
             })
             .then(resolve)
@@ -77,10 +77,9 @@ export const SetItem = (key: string, value: any, Storage: IStorageDriverExtended
          */
         const returnMany = (StringifiedJSON: string): Promise<any[]> => {
             const allLocations = [path.join(baseLocation, `${key}.db`), path.join(fileLocation, 'past')];
-            return Promise.all(allLocations.map((writePath) => {
-                return EnsureDataFile(writePath)
-                    .then(() => SafeWrite(writePath, StringifiedJSON));
-            }));
+            // SafeWrite is atomic (temp file + rename): no empty-file window
+            // for concurrent readers to trip over.
+            return Promise.all(allLocations.map((writePath) => SafeWrite(writePath, StringifiedJSON, Storage.durability)));
         };
         let stringValue: string;
         return stringifyJSON(value)
@@ -91,17 +90,15 @@ export const SetItem = (key: string, value: any, Storage: IStorageDriverExtended
             .then((databool) => {
                 if (databool === false) {
                     // file to be written to does not exist. Check backup
-                    return checkNext(fileLocation, path.join(baseLocation, `${key}.db`), stringValue, returnMany);
+                    return checkNext(fileLocation, path.join(baseLocation, `${key}.db`), stringValue, returnMany, Storage.durability);
                 } else {
                     // file exists copy current file to backup location and write new data to current
-                    return backupDirWrite(path.join(baseLocation, `${key}.db`), fileLocation, stringValue);
+                    return backupDirWrite(path.join(baseLocation, `${key}.db`), fileLocation, stringValue, Storage.durability);
                 }
             })
             .then(() => {
                 // if this key does not exist in keys insert it.
-                if (Storage.allKeys.indexOf(key) === -1) {
-                    Storage.allKeys.push(key);
-                }
+                Storage.trackKey(key);
                 return value; // finally resolve the original data
             })
             .then(resolve)

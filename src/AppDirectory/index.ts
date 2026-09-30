@@ -31,7 +31,7 @@ export class AppDirectory implements IAppDirectory {
         } else if (this.platform === 'win32') {
             dataPath = path.join(os.homedir(), 'AppData', 'Local', `${this.col}`);
         } else if (this.platform === 'linux') {
-            dataPath = path.join(os.homedir(), 'local', 'share', `${this.col}`);
+            dataPath = path.join(os.homedir(), '.local', 'share', `${this.col}`);
         } else {
             dataPath = '';
         }

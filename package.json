@@ -1,18 +1,27 @@
 {
   "name": "@qiyangxy/tedb-electron-storage",
-  "version": "0.2.1",
+  "version": "0.4.0",
   "description": "TeDB storage driver for Electron using single file method per object in collection",
-  "main": "dist/bundle.js",
+  "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "packageManager": "pnpm@10.22.0",
   "scripts": {
-    "test": "jest --no-cache --config=./spec/jest.json",
-    "build": "webpack"
+    "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "jest",
+    "test:coverage": "jest --testPathIgnorePatterns=spec/large --coverage",
+    "test:large": "jest spec/large"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/fork-organizations/tedb-electron-storaget"
+    "url": "git+https://github.com/fork-organizations/tedb-electron-storage"
   },
-"publishConfig": {"access": "public"},
+  "publishConfig": {
+    "access": "public"
+  },
   "author": "qiyangxy",
   "license": "MIT",
   "keywords": [
@@ -27,37 +36,22 @@
     "node"
   ],
   "devDependencies": {
-    "@types/graceful-fs": "^4.1.2",
-    "@types/jest": "^21.1.5",
-    "@types/node": "^8.0.48",
-    "@types/webpack": "^3.8.0",
-    "babel-core": "^6.26.0",
-    "babel-minify": "^0.2.0",
-    "babel-minify-webpack-plugin": "^0.2.0",
-    "babel-plugin-add-module-exports": "^0.2.1",
-    "babel-plugin-dev-expression": "^0.2.1",
-    "babel-plugin-transform-class-properties": "^6.24.1",
-    "babel-plugin-transform-es2015-classes": "^6.24.1",
-    "babel-plugin-transform-es2015-destructuring": "^6.23.0",
-    "babel-plugin-transform-object-rest-spread": "^6.26.0",
-    "babel-preset-env": "^1.6.1",
-    "babel-preset-es2015": "^6.24.1",
-    "babel-preset-stage-0": "^6.24.1",
-    "clean-webpack-plugin": "^0.1.17",
-    "jest": "^21.2.1",
+    "@types/graceful-fs": "^4.1.5",
+    "@types/jest": "^29.5.12",
+    "@types/node": "^20.14.0",
+    "jest": "^29.7.0",
     "tedb": "^0.4.4",
-    "ts-loader": "^3.1.1",
-    "typescript": "^2.6.1",
-    "uglifyjs-webpack-plugin": "^1.0.1",
-    "webpack": "^3.8.1",
-    "webpack-bundle-analyzer": "^2.9.0"
+    "ts-jest": "^29.2.2",
+    "typescript": "^5.5.4",
+    "vite": "^8.3.1",
+    "vite-plugin-dts": "^5.1.1"
   },
   "dependencies": {
-    "graceful-fs": "^4.1.11",
+    "graceful-fs": "^4.2.11",
     "tedb-utils": "^0.0.1"
   },
   "bugs": {
-    "url": "https://github.com/fork-organizations/tedb-electron-storaget/issues"
+    "url": "https://github.com/fork-organizations/tedb-electron-storage/issues"
   },
-  "homepage": "https://github.com/fork-organizations/tedb-electron-storaget#readme"
+  "homepage": "https://github.com/fork-organizations/tedb-electron-storage#readme"
 }

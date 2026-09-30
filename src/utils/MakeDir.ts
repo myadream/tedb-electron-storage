@@ -6,7 +6,7 @@ export const MakeDir = (path: string | Buffer, mode: number = 0o777): Promise<nu
             if (err) {
                 return reject(new Error(':::Storage::: MakeDir Error.' + err.message));
             } else {
-                resolve();
+                resolve(null);
             }
         });
     });

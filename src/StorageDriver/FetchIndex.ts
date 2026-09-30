@@ -218,7 +218,7 @@ const readNext = (dirLocation: string, baseLocation: string, key: string) => {
             .then((databool) => {
                 if (databool === false) {
                     // no dir found
-                    return new Promise((rs) => rs());
+                    return new Promise((rs) => rs(undefined));
                 } else {
                     return testBackup(baseLocation, dirLocation, key);
                 }

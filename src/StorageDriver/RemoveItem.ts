@@ -12,11 +12,7 @@ const path = require('path');
  */
 const doesNotExist = (key: string, fileLocation: string, Storage: IStorageDriverExtended): Promise<any> => {
     return new Promise((resolve, reject) => {
-        try {
-            Storage.allKeys = Storage.allKeys.filter((cur) => cur !== key);
-        } catch (e) {
-            return reject(e);
-        }
+        Storage.untrackKey(key);
         return removeBackup(fileLocation)
             .then(resolve)
             .catch(reject);
@@ -36,12 +32,8 @@ const doesExist = (key: string, baseLocation: string, fileLocation: string, Stor
         return removeBackup(fileLocation)
             .then(() => UnlinkFile(path.join(baseLocation, `${key}.db`)))
             .then(() => {
-                try {
-                    Storage.allKeys = Storage.allKeys.filter((cur) => cur !== key);
-                } catch (e) {
-                    throw e;
-                }
-                resolve();
+                Storage.untrackKey(key);
+                resolve(undefined);
             })
             .catch(reject);
     });

@@ -37,7 +37,7 @@ export const removeBackup = (dirLocation: string): Promise<null> => {
             .then((bool): Promise<null> => {
                 if (bool === false) {
                     // dir does not exist anyway
-                    return new Promise((res) => res());
+                    return new Promise((res) => res(null));
                 } else {
                     return safeToRead(dirLocation);
                 }

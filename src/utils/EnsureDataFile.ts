@@ -18,7 +18,7 @@ export const EnsureDataFile = (filename: string): Promise<null> => {
                 if (dataBool === false) {
                     return simpleWrite(filename);
                 } else {
-                    return new Promise((res) => res());
+                    return new Promise((res) => res(null));
                 }
             })
             .then(resolve)

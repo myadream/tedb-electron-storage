@@ -15,13 +15,13 @@ const path = require('path');
  * @param {IStorageDriverExtended} Storage
  * @returns {Promise<any>}
  */
-const deleteBackupFileAndDir = (fileLocation: string, key: string, Storage: IStorageDriverExtended): Promise<null> => {
+const deleteBackupFileAndDir = (fileLocation: string, key: string, Storage: IStorageDriverExtended): Promise<any> => {
     return new Promise((resolve, reject) => {
         return UnlinkFile(path.join(fileLocation, 'past'))
             .then(() => safeRmDir(fileLocation))
             .then(() => {
-                Storage.allKeys = Storage.allKeys.filter((cur) => cur !== key);
-                resolve();
+                Storage.untrackKey(key);
+                resolve(undefined);
             })
             .catch(reject);
     });
@@ -93,8 +93,8 @@ const unlinkStorage = (base: string, key: string, Storage: IStorageDriverExtende
         // delete base and remove key from all keys
         return UnlinkFile(path.join(base, `${key}.db`))
             .then(() => {
-                Storage.allKeys = Storage.allKeys.filter((cur) => cur !== key);
-                resolve();
+                Storage.untrackKey(key);
+                resolve(undefined);
             })
             .catch(reject);
     });
@@ -115,8 +115,8 @@ const unlinkeAndDir = (base: string, backup: string, key: string, Storage: IStor
         return UnlinkFile(path.join(base, `${key}.db`))
             .then(() => safeRmDir(backup))
             .then(() => {
-                Storage.allKeys = Storage.allKeys.filter((cur) => cur !== key);
-                resolve();
+                Storage.untrackKey(key);
+                resolve(undefined);
             })
             .catch(reject);
     });
@@ -213,8 +213,8 @@ const testFileLocation = (fileLocation: string, baseLocation: string, key: strin
             .then((bool) => {
                 if (bool === false) {
                     // dir does not exist  and base key was not found remove key
-                    Storage.allKeys = Storage.allKeys.filter((cur) => cur !== key);
-                    return new Promise((res) => res());
+                    Storage.untrackKey(key);
+                    return new Promise((res) => res(undefined));
                 } else {
                     // backup dir was found
                     return testBackup(baseLocation, fileLocation, key, Storage);

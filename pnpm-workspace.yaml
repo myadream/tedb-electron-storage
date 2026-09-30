@@ -1,0 +1,4 @@
+# Marks this vendored package as its own pnpm workspace root so installs here
+# do not get absorbed by the parent repository's workspace. The package list is
+# intentionally empty: the root package.json is the only member.
+packages: []

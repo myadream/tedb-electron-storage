@@ -1,4 +1,4 @@
-import {ReadDir, RmDir, UnlinkFile, LStat} from './index';
+import {ReadDir, RmDir, UnlinkFile, LStat, mapPool, IO_LIMIT} from './index';
 const path = require('path');
 
 const deleteFile = (dir: string, file: string | Buffer) => {
@@ -22,9 +22,7 @@ export const ClearDirectory = (directory: string): Promise<null> => {
     return new Promise((resolve, reject) => {
         return ReadDir(directory)
             .then((files) => {
-                return Promise.all(files.map((file) => {
-                    return deleteFile(directory, file);
-                }));
+                return mapPool(files, IO_LIMIT, (file) => deleteFile(directory, file));
             })
             .then(() => {
                 return RmDir(directory);

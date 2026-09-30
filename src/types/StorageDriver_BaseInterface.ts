@@ -37,14 +37,15 @@ export interface IStorageDriver {
      */
     removeIndex(key: string): Promise<null>;
     /**
-     * Iterate every key-value pair,
+     * Iterate every key-value pair (callback receives the document value
+     * first, its key second — this is the order tedb's Datastore expects).
      * IterationCallback should return truthy to break iteration(resulting in promise resolution)
      * IterationCallback should throw exceptions if error occurs, this will be caught by the promise and propagate up
      * the promise chain and handled accordingly.
      *
      * @param iteratorCallback - Function to iterate key values pairs, return truthy to break iteration
      */
-    iterate(iteratorCallback: (key: string, value: any, iteratorNumber?: number) => any): Promise<any>;
+    iterate(iteratorCallback: (value: any, key: string, iteratorNumber?: number) => any): Promise<any>;
     /**
      * Retrieve all keys - _ids of all documents for this
      */

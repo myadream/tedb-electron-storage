@@ -1,13 +1,11 @@
 import {IStorageDriverExtended} from '../types';
-import {ReadDir, safeReadFile, RmDir, UnlinkFile, EnsureDataFile, SafeWrite, safeParse, safeDirExists} from '../utils';
+import {ReadDir, safeReadFile, RmDir, UnlinkFile, SafeWrite, safeParse, safeDirExists, stringifyJSON, mapPool, IO_LIMIT} from '../utils';
 const path = require('path');
 import {flattenArr, rmArrDups} from 'tedb-utils';
 
 const removeAll = (dirLocation: string, base: string, key: string): Promise<string[]> => {
     return new Promise((resolve, reject) => {
-        return EnsureDataFile(path.join(base, `${key}.db`))
-            .then(() => EnsureDataFile(path.join(dirLocation, key, 'past')))
-            .then(() => UnlinkFile(path.join(dirLocation, key, 'past')))
+        return UnlinkFile(path.join(dirLocation, key, 'past'))
             .then(() => RmDir(path.join(dirLocation, key)))
             .then(() => UnlinkFile(path.join(base, `${key}.db`)))
             .then(() => resolve([]))
@@ -17,8 +15,7 @@ const removeAll = (dirLocation: string, base: string, key: string): Promise<stri
 
 const removeJustbase = (base: string, key: string): Promise<string[]> => {
     return new Promise((resolve, reject) => {
-        return EnsureDataFile(path.join(base, `${key}.db`))
-            .then(() => UnlinkFile(path.join(base, `${key}.db`)))
+        return UnlinkFile(path.join(base, `${key}.db`))
             .then(() => resolve([]))
             .catch(reject);
     });
@@ -29,7 +26,6 @@ const RemoveDirectoryAndFile = (base: string, dirLocation: string, key: string):
         return safeDirExists(path.join(dirLocation, key))
             .then((bool): Promise<string[]> => {
                 if (bool === false) {
-                    // return removeAll(dirLocation, base, key);
                     return removeJustbase(base, key);
                 } else {
                     // directory exists remove dir/file and base
@@ -54,8 +50,11 @@ const RemoveDirectoryAndFile = (base: string, dirLocation: string, key: string):
  */
 const WriteBackupToBaseReturn = (fileData: any, baseLocation: string): Promise<string[]> => {
     return new Promise((resolve, reject) => {
-        return EnsureDataFile(path.join(baseLocation, `${fileData._id}.db`))
-            .then(() => SafeWrite(path.join(baseLocation, `${fileData._id}.db`), fileData))
+        // SafeWrite takes the serialized string — the parsed object it used to
+        // receive here made fs.writeFile throw with a TypeError.
+        return stringifyJSON(fileData)
+            // recovery write: always strict — this is the durability-critical path
+            .then((str) => SafeWrite(path.join(baseLocation, `${fileData._id}.db`), str))
             .then(() => resolve([fileData._id]))
             .catch(reject);
     });
@@ -116,34 +115,25 @@ const comboFileParseMethod = (obj: IcomboRead): Promise<IcomboParse> => {
 
 const checkBackupFile = (dirLocation: string, baseLocation: string, key: string): Promise<string[][]> => {
     return new Promise((resolve, reject) => {
-        return ReadDir(path.join(dirLocation, key))
-            .then((keyDirFiles) => {
-                return Promise.all(keyDirFiles.map((ignoreParam) => {
-                    // Ignore the file incoming. QUICK FIX -> Only reading in the past file
-                    return comboFileReadMethod(dirLocation, key);
-                }));
+        // the backup directory holds exactly one file ("past"); read it once
+        return comboFileReadMethod(dirLocation, key)
+            .then((obj: IcomboRead): Promise<IcomboParse> => {
+                if (obj.read === false) {
+                    return new Promise((rs) => rs({key: obj.key, parsedData: obj.rawData, read: obj.read}));
+                } else {
+                    return comboFileParseMethod(obj);
+                }
             })
-            .then((filesRawData: IcomboRead[]) => {
-                return Promise.all(filesRawData.map((obj: IcomboRead): Promise<IcomboParse> => {
-                    if (obj.read === false) {
-                        return new Promise((rs) => rs({key: obj.key, parsedData: obj.rawData, read: obj.read}));
-                    } else {
-                        return comboFileParseMethod(obj);
-                    }
-                }));
+            .then((fileData: IcomboParse): Promise<string[]> => {
+                if (fileData.parsedData === false) {
+                    // this means both current location and backup are unreadable. -> remove both
+                    return RemoveDirectoryAndFile(baseLocation, dirLocation, fileData.key);
+                } else {
+                    // read backup location, write to baselocation then return _id;
+                    return WriteBackupToBaseReturn(fileData.parsedData, baseLocation);
+                }
             })
-            .then((filesData: IcomboParse[]): Promise<string[][]> => {
-                return Promise.all(filesData.map((fileData) => {
-                    if (fileData.parsedData === false) {
-                        // this means both current location and backup are unreadable. -> remove both
-                        return RemoveDirectoryAndFile(baseLocation, dirLocation, fileData.key);
-                    } else {
-                        // read backup location, write to baselocation then return _id;
-                        return WriteBackupToBaseReturn(fileData.parsedData, baseLocation);
-                    }
-                }));
-            })
-            .then(resolve)
+            .then((res) => resolve([res]))
             .catch(reject);
     });
 };
@@ -166,14 +156,9 @@ const checkBackupDir = (dirLocation: string, baseLocation: string, key: string):
     });
 };
 
-// need to make what I did for the backup up here
-// a separate method to return objects of information to
-// save the key
-
 const removeBaseButreturnDoubleArr = (base: string, key: string): Promise<string[][]> => {
     return new Promise((resolve, reject) => {
-        return EnsureDataFile(path.join(base, `${key}.db`))
-            .then(() => UnlinkFile(path.join(base, `${key}.db`)))
+        return UnlinkFile(path.join(base, `${key}.db`))
             .then(() => resolve([[]]))
             .catch(reject);
     });
@@ -196,7 +181,6 @@ const readBackupLocation = (dirLocation: string, baseLocation: string, obj: Icom
                     // remove base location file that
                     // was found but unparsable
                     return removeBaseButreturnDoubleArr(baseLocation, obj.key);
-                    // return new Promise((res) => res([[]]));
                 } else {
                     return checkBackupDir(dirLocation, baseLocation, obj.key);
                 }
@@ -206,43 +190,54 @@ const readBackupLocation = (dirLocation: string, baseLocation: string, obj: Icom
     });
 };
 
+/**
+ * Keep only real document files: skip index files, the version directory and
+ * atomic-write temp files (their names never end in ".db").
+ */
+const isDocumentFile = (file: string): boolean => {
+    const name = String(file);
+    return !name.includes('index_') && !name.includes('`v') && name.endsWith('.db');
+};
+
+const keyFromFilename = (file: string): string => {
+    const name = String(file);
+    return name.substr(0, name.indexOf('.'));
+};
+
 const readAllDir = (baseLocation: string, dirLocation: string, Storage: IStorageDriverExtended): Promise<string[]> => {
     return new Promise((resolve, reject) => {
         return ReadDir(baseLocation)
             .then((files) => {
-                const reg = new RegExp('index_');
-                const vers = new RegExp('`v');
-                // don't try and read index files or the version directory
-                const noIndexFiles = files.filter((file) => {
-                    if (!reg.test(file) && !vers.test(file)) {
-                        return file;
-                    }
-                });
-                return Promise.all(noIndexFiles.map((dbFile) => {
-                    const key = String(dbFile).substr(0, String(dbFile).indexOf('.'));
+                const noIndexFiles = files.filter(isDocumentFile);
+                // bounded fan-out: a 100k-file collection must not open every
+                // file at once
+                return mapPool(noIndexFiles, IO_LIMIT, (dbFile) => {
+                    const key = keyFromFilename(dbFile);
                     return comboFileReadFMethod(baseLocation, key);
-                }));
+                });
             })
             .then((filesRawData: IcomboRead[]) => {
-                return Promise.all(filesRawData.map((obj: IcomboRead): Promise<IcomboParse> => {
+                return mapPool(filesRawData, IO_LIMIT, (obj: IcomboRead): Promise<IcomboParse> => {
                     if (obj.read === false) {
                         return new Promise((rs) => rs({key: obj.key, parsedData: obj.rawData, read: obj.read}));
                     } else {
                         return comboFileParseMethod(obj);
                     }
-                }));
+                });
             })
             .then((filesData: IcomboParse[]): Promise<string[][][]> => {
-                return Promise.all(filesData.map((fd) => {
+                return mapPool(filesData, IO_LIMIT, (fd): Promise<string[][]> => {
                     if (fd.parsedData === false) {
                         // search backup location for readable files for each file read its directory
                         // -> dir location is -> appName/collection/version/states/ dir / past
-                        return readBackupLocation(dirLocation, baseLocation, fd);
+                        // recovery deletes/rewrites files: serialize it against any in-flight
+                        // write on the same key
+                        return Storage.operationQueue.enqueue(fd.key, () => readBackupLocation(dirLocation, baseLocation, fd));
                     } else {
                         // resolve the actual key
                         return new Promise<string[][]>((res) => res([[fd.parsedData._id]]));
                     }
-                }));
+                });
             })
             .then((keys: string[][][]) => {
                 const incomingKeys = flattenArr(keys);
@@ -284,20 +279,27 @@ const readAllLocations = (base: string, dir: string, Storage: IStorageDriverExte
     return new Promise((resolve, reject) => {
         return ReadDir(base)
             .then((files): Promise<string[]> => {
-                const reg = new RegExp('index_');
-                const vers = new RegExp('`v');
-                // don't try and read index files or the version directory
-                const filteredFiles = files.filter((file) => {
-                    if (!reg.test(file) && !vers.test(file)) {
-                        return file;
-                    }
-                });
+                const filteredFiles = files.filter(isDocumentFile);
 
-                if (filteredFiles.length === Storage.allKeys.length) {
-                    // return keys because they match current length
+                // Trust the in-memory cache only when the on-disk file names
+                // match it exactly. The old count-only comparison returned a
+                // stale cache whenever a concurrent insert and delete kept the
+                // total count unchanged.
+                const diskKeys = filteredFiles.map(keyFromFilename);
+                const cacheSet = new Set(Storage.allKeys);
+                const diskSet = new Set(diskKeys);
+                let matchesCache = diskSet.size === cacheSet.size;
+                if (matchesCache) {
+                    for (const k of diskSet) {
+                        if (!cacheSet.has(k)) {
+                            matchesCache = false;
+                            break;
+                        }
+                    }
+                }
+                if (matchesCache) {
                     return new Promise((res) => res(Storage.allKeys));
                 } else {
-                    // key lengths did not match up
                     return readKeysSafety(base, dir, Storage);
                 }
             })

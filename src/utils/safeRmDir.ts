@@ -7,7 +7,7 @@ export const safeRmDir = (fileLocation: string): Promise<any> => {
             .then((bool): Promise<any> => {
                 if (bool === false) {
                     // no dir found
-                    return new Promise((res) => res());
+                    return new Promise((res) => res(undefined));
                 } else {
                     // remove dir
                     return RmDir(fileLocation);

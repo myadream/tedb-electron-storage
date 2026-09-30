@@ -1,6 +1,7 @@
-export {IStorageDriverExtended, TiteratorCB} from './types';
+export type {IStorageDriverExtended, TiteratorCB, TDurability, IElectronStorageOptions} from './types';
 export {GetItem, SetItem, Clear, FetchIndex, Iterate, Keys, RemoveItem, StoreIndex, RemoveIndex, ElectronStorage, indexCheck} from './StorageDriver';
-export {AppDirectory, IAppDirectory} from './AppDirectory';
+export {AppDirectory} from './AppDirectory';
+export type {IAppDirectory} from './AppDirectory';
 export {
     TruncateFile,
     OpenFile,
@@ -10,11 +11,11 @@ export {
     CloseFile,
     FileStat,
     FileSync,
-    FlushStorage, IFlushStorageOptions,
+    FlushStorage,
     WriteFile,
     ReadFile,
     SafeWrite,
-    safeReadFile, IsafeReadFileOptions,
+    safeReadFile,
     parseJSON,
     stringifyJSON,
     EnsureDataFile,
@@ -32,4 +33,9 @@ export {
     safeStat,
     safeDirExists,
     safeRmDir,
+    KeyedQueue,
+    mapPool,
+    IO_LIMIT,
 } from './utils';
+export type {IFlushStorageOptions} from './utils/FlushStorage';
+export type {IsafeReadFileOptions} from './utils/safeReadFile';

@@ -21,16 +21,16 @@ Since this package relies highly on NodeJS's FS module much of the fs methods we
 
 ```typescript
 // ES6 options and available extensions
-import { IStorageDriverExtended, TiteratorCB, // from the types direrctory
+import { IStorageDriverExtended, TiteratorCB, // from the types directory
     GetItem, SetItem, Clear, FetchIndex, Iterate, Keys, RemoveItem, StoreIndex, RemoveIndex, ElectronStorage, indexCheck, // methods for the actual storage driver.
     AppDirectory, IAppDirectory, // from the AppDirectory directory
-    
-    // below are all the functions used in the package as utilities 
+
+    // below are all the functions used in the package as utilities
     // and FS replacements
-    TruncateFile, OpenFile, MakeDir, CopyFile, AppendFile, CloseFile, FileStat, FileSync, FlushStorage,  IFlushStorageOptions, WriteFile, ReadFile, SafeWrite, safeReadFile,  IsafeReadFileOptions, parseJSON, stringifyJSON, EnsureDataFile, UnlinkFile, ReadDir, RmDir, LStat, ClearDirectory, CopyAndWrite, WriteNewPastandBase, MakeVersionDirPast, safeParse, RenameFile, removeBackup, safeStat, safeDirExists, safeRmDir, flattenStorageDriver, rmArrDupsStorageDriver,
+    TruncateFile, OpenFile, MakeDir, CopyFile, AppendFile, CloseFile, FileStat, FileSync, FlushStorage,  IFlushStorageOptions, WriteFile, ReadFile, SafeWrite, safeReadFile,  IsafeReadFileOptions, parseJSON, stringifyJSON, EnsureDataFile, UnlinkFile, ReadDir, RmDir, LStat, ClearDirectory, CopyAndWrite, WriteNewPastandBase, MakeVersionDirPast, safeParse, RenameFile, removeBackup, safeStat, safeDirExists, safeRmDir, KeyedQueue, mapPool, IO_LIMIT,
 } from 'tedb-electron-storage';
 ```
-Exports with the key term `safe` will not reject and instead return `false` for mistakes. This is useful in the package for cross platform errors such as reading files that do not exist. More on the files error handling could be implemented in the future.
+Exports with the key term `safe` resolve `false` when a file is missing instead of rejecting; any other error (permissions, reading a directory, ...) rejects so callers can tell "missing" from "broken".
 
 ## Table of Contents
 
@@ -47,10 +47,52 @@ Since the use of this package is through [TeDB](https://github.com/tedb-org/teDB
 
 It is also important to know the limitations of this storage driver. Currently there is no insert buffer for inserting large amounts of documents. Since each document has its own file this takes time for the OS to create the files. To insert 10k items on my 2015 mac took 13 seconds. However all other operations on 100k collections took under 50ms even if there was no index. With indices however you will get results for a find/update/remove within 1-2ms depending on how many fields are searched. For each key in a query a search is a composed. Then cross referenced and compacted down to the remaining results. So the less keys in the query the faster the search.
 
+## Concurrency and crash safety (0.3.0)
+
+Since 0.3.0 the driver is safe under concurrent use and crash-safe on write:
+
+* **Atomic writes** — every write lands in a uniquely named temp file, is fsynced, then atomically renamed over the target. A crash mid-write can only leave an inert `*.tmp.*` file behind (ignored by all scans); documents are never observed truncated or empty. On Windows, renames retry with exponential backoff to ride out transient EPERM from antivirus software.
+* **Per-key serialization** — `setItem`/`getItem`/`removeItem` (and the index equivalents) targeting the same key run in submission order through an in-process queue; operations on different keys stay fully parallel. The destructive self-healing in read paths therefore can never race a concurrent write.
+* **Bounded scans** — `keys()`/`iterate()`/`collectionSanitize()`/`clear()` process files through a worker pool capped at 32 concurrent opens (`IO_LIMIT`), so a 100k-file collection cannot exhaust file descriptors.
+* **Cache validation** — `keys()` trusts its in-memory key cache only when the on-disk file names match it exactly (set comparison), falling back to a full recovery scan otherwise.
+
+Behavior changes to be aware of: reads/writes that hit real filesystem errors (EACCES, EISDIR, EPERM on delete, ...) now reject instead of being silently swallowed as "file missing"; `iterate` callbacks receive `(value, key)` — matching what tedb's Datastore actually expects (the type declaration was previously inverted); "no value" resolutions may be `null` where the interface declares `Promise<null>`; since 0.4.0 the backup copy (`CopyFile`) is a byte-exact kernel copy that **rejects on any IO error instead of silently skipping** — a backup always holds the exact previous generation of the file, corrupted bytes included — and key tracking keeps an O(1) `Set` mirror of `allKeys`.
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full data flow, on-disk layout and concurrency model.
+
+## Building and testing
+
+```bash
+pnpm install
+pnpm test:coverage   # fast tiers + coverage threshold gates (~22s) — run this every change
+pnpm test            # jest: unit + concurrency + large-scale + tedb integration (auto-skips without tedb)
+pnpm build           # vite (lib mode) -> dist/ (index.js CJS bundle + index.d.ts)
+pnpm typecheck       # tsc --noEmit
+pnpm test:large      # only the large-scale suite (set TEDB_LARGE_N to scale, e.g. 100000)
+```
+
+The suite covers 97% of statements / 91% of branches; `pnpm test:coverage`
+fails when those numbers regress (thresholds live in `jest.config.js`). See
+[docs/TESTING.md](docs/TESTING.md) for the test layout, the recovery-semantics
+contract every method must preserve, and how to add cases, and
+[CHANGELOG.md](CHANGELOG.md) for release history.
+
 As for the saving location on your desktop, you can check out the AppDirectory directory and read the index file.
-* For Mac your data will be saved at `user/Library/ApplicationSupport/collectionName`. 
-* For Windows `user\AppData\Local\collectionName`. 
-* And for linux `user/local/share/collectionName`.
+* For Mac your data will be saved at `user/Library/ApplicationSupport/dbName`.
+* For Windows `user\AppData\Local\dbName`.
+* And for linux `user/.local/share/dbName`.
+* Or wherever you point it at by passing a custom directory as the third constructor argument: `new ElectronStorage(dbName, collectionName, dataDir)`.
+
+### Durability levels (0.4.0)
+
+The fourth constructor argument tunes the crash-safety/performance trade-off of writes:
+
+```typescript
+new ElectronStorage(dbName, collectionName, dataDir, {durability: 'relaxed'});
+```
+
+* **`'strict'` (default)** — every write fsyncs its temp file (and directory on POSIX) before the atomic rename. A confirmed write survives power loss.
+* **`'relaxed'`** — skips both fsyncs but keeps the atomic rename. Files can never tear or end up half-written; a power loss may drop the most recent writes (the same window the OS page cache already gives you). Measured on Windows: ~3× faster inserts, ~2× faster updates. Recovery writes (backup self-healing) always run strict.
 
 There you can query your data within that directory. A db for your application might look like 
 ```text

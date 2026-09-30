@@ -1,4 +1,5 @@
-import {EnsureDataFile, SafeWrite} from './index';
+import {SafeWrite} from './index';
+import type {TDurability} from '../types';
 const path = require('path');
 
 /**
@@ -8,15 +9,14 @@ const path = require('path');
  * @param {any} returnMany
  * @param {string} baseLocation
  * @param data
+ * @param {TDurability} durability
  * @returns {Promise<any>}
  * @constructor
  */
-export const WriteNewPastandBase = (fileLocation: string, returnMany: any, baseLocation: string, data: any): Promise<any> => {
+export const WriteNewPastandBase = (fileLocation: string, returnMany: any, baseLocation: string, data: any, durability: TDurability = 'strict'): Promise<any> => {
     return new Promise((resolve, reject) => {
-        return EnsureDataFile(path.join(fileLocation, 'past'))
-            .then(() => SafeWrite(path.join(fileLocation, 'past'), data))
-            .then(() => EnsureDataFile(baseLocation))
-            .then(() => SafeWrite(baseLocation, data))
+        return SafeWrite(path.join(fileLocation, 'past'), data, durability)
+            .then(() => SafeWrite(baseLocation, data, durability))
             .then(resolve)
             .catch((err) => {
                 return reject(new Error(':::Storage::: WriteNewPastandBase Error. ' + err.message));

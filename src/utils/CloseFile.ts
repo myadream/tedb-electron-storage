@@ -6,7 +6,7 @@ export const CloseFile = (fd: number): Promise<null> => {
             if (err) {
                 return reject(new Error(':::Storage::: CloseFile Error. ' + err.message));
             } else {
-                resolve();
+                resolve(null);
             }
         });
     });
