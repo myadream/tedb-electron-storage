@@ -33,7 +33,7 @@ await db.saveIndex('email');  // 索引持久化（每次全量重写索引文�
    ├─ <key>.db                  # 文档当前值（每文档一个 JSON 文件）
    ├─ index_<fieldName>.db      # 索引（JSON 数组，整体读写）
    └─ `v0.0.1/states/
-      ├─ <key>/past             # 该文档上一代内容（一代备份）
+      ├─ <key>/past             # 该文档上一代内容（一代备份，lazyBackup 下由首次更新创建）
       └─ index_<fieldName>/past # 该索引上一代内容
 ```
 
@@ -45,8 +45,9 @@ await db.saveIndex('email');  // 索引持久化（每次全量重写索引文�
 
 ```
 value → JSON.stringify（往返校验）
-  → base 文件不存在？
-      是 → 无备份目录？ 建目录后同时写 base + past（新文档双写）
+  → base 文件不存在？（safeStat 探测，不读内容）
+      是 → 无备份目录？ lazyBackup（默认）下只写 base，past 留给首次更新
+           （lazyBackup:false 或有备份目录 → 写 past + base）
            有备份目录？ 先写 past 再写 base
       否 → copy base 内容 → past（保留上一代）
            再写新内容 → base
@@ -84,7 +85,7 @@ value → JSON.stringify（往返校验）
    - 读自愈（删文件）不会与该 key 的在途写入交错；
    - `allKeys` 的增删不会交错撕裂。
 2. **SafeWrite（按路径串行）**：utils 层面同一文件路径的写排队（见上），兜底直接调用 utils 的场景。
-3. **mapPool（有界并发池，IO_LIMIT=32）**：`keys()`/`iterate()`/`collectionSanitize()`/`ClearDirectory` 等全集合扫描不再无界 `Promise.all`（10 万文件会耗尽 fd），最多同时打开 32 个文件；扫描中发现损坏文档时的恢复动作会**转入该 key 的队列**执行，不与写入竞争。
+3. **mapPool（有界并发池，IO_LIMIT=128）**：`keys()`/`iterate()`/`collectionSanitize()`/`ClearDirectory` 等全集合扫描不再无界 `Promise.all`（10 万文件会耗尽 fd），最多同时打开 128 个文件；扫描中发现损坏文档时的恢复动作会**转入该 key 的队列**执行，不与写入竞争。
 
 **keys() 缓存校验**：内存 `allKeys` 缓存只在"磁盘文件名集合与缓存完全一致"时被直接信任；否则触发全量扫描（顺带完成损坏恢复）。旧的"文件数量相等即信任"启发式在插入+删除恰好抵消时会返回过期结果，已移除。
 
@@ -94,7 +95,7 @@ value → JSON.stringify（往返校验）
 
 | 特征 | 说明 |
 |---|---|
-| 每文档一文件 | 插入吞吐受限于小文件创建 + fsync。默认每次写有 2~3 次 fsync（崩溃安全的代价）。实测 Windows/NTFS 3000 条约 20-30s（见 `spec/large`，可用 `TEDB_LARGE_N` 调大规模） |
+| 每文档一文件 | 插入吞吐受限于小文件创建 + fsync。lazyBackup（0.6.0 默认开）后首写为 1 次 fsync，更新为 1 次拷贝 + 1 次 fsync（实测 Windows 基线见 docs/OPTIMIZATION.md，可用 `TEDB_LARGE_N` 调大规模） |
 | 索引整体重写 | 每次 `saveIndex` 重写整个索引 JSON，成本随集合规模线性增长——建议低频持久化 |
 | 无读缓存 | persist-only 设计，每次读都走磁盘（OS 页缓存兜底） |
 | key 不能含 `.` | 文件名→key 取第一个 `.` 之前的部分 |

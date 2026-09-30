@@ -21,6 +21,14 @@ export type TDurability = 'strict' | 'relaxed';
 /** Constructor options for ElectronStorage. */
 export interface IElectronStorageOptions {
     durability?: TDurability;
+    /**
+     * First write of a key persists only the base file; the backup (past) is
+     * created by the first update of that key. Default true — inserts cost one
+     * atomic write instead of two. `false` restores the legacy behavior where
+     * the very first write already fills base + backup. Atomicity (temp file +
+     * rename) is unaffected either way.
+     */
+    lazyBackup?: boolean;
 }
 
 export interface IStorageDriverExtended extends IStorageDriver {
@@ -30,6 +38,8 @@ export interface IStorageDriverExtended extends IStorageDriver {
     allKeysSet: Set<string>;
     version: string;
     durability: TDurability;
+    /** See IElectronStorageOptions.lazyBackup. */
+    lazyBackup: boolean;
     /**
      * Per-key operation queue serializing reads/writes/removals targeting the
      * same key. Collection-wide scans use it to run their per-key recovery

@@ -1,57 +1,57 @@
 {
-  "name": "@qiyangxy/tedb-electron-storage",
-  "version": "0.5.0",
-  "description": "TeDB storage driver for Electron using single file method per object in collection",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
-  "files": [
-    "dist"
-  ],
-  "packageManager": "pnpm@10.22.0",
-  "scripts": {
-    "build": "vite build",
-    "typecheck": "tsc --noEmit",
-    "test": "jest",
-    "test:coverage": "jest --testPathIgnorePatterns=spec/large --coverage",
-    "test:large": "jest spec/large"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/fork-organizations/tedb-electron-storage"
-  },
-  "publishConfig": {
-    "access": "public"
-  },
-  "author": "qiyangxy",
-  "license": "MIT",
-  "keywords": [
-    "typescript",
-    "embedded",
-    "tedb",
-    "TeDB",
-    "db",
-    "storage",
-    "driver",
-    "electron",
-    "node"
-  ],
-  "devDependencies": {
-    "@types/graceful-fs": "^4.1.5",
-    "@types/jest": "^29.5.12",
-    "@types/node": "^20.14.0",
-    "jest": "^29.7.0",
-    "tedb": "^0.4.4",
-    "ts-jest": "^29.2.2",
-    "typescript": "^5.5.4",
-    "vite": "^8.3.1",
-    "vite-plugin-dts": "^5.1.1"
-  },
-  "dependencies": {
-    "graceful-fs": "^4.2.11",
-    "tedb-utils": "^0.0.1"
-  },
-  "bugs": {
-    "url": "https://github.com/fork-organizations/tedb-electron-storage/issues"
-  },
-  "homepage": "https://github.com/fork-organizations/tedb-electron-storage#readme"
+    "name": "@qiyangxy/tedb-electron-storage",
+    "version": "0.6.0",
+    "description": "TeDB storage driver for Electron using single file method per object in collection",
+    "main": "dist/index.js",
+    "types": "dist/index.d.ts",
+    "files": [
+        "dist"
+    ],
+    "packageManager": "pnpm@10.22.0",
+    "scripts": {
+        "build": "vite build",
+        "typecheck": "tsc --noEmit",
+        "test": "jest",
+        "test:coverage": "jest --testPathIgnorePatterns=spec/large --coverage",
+        "test:large": "jest spec/large"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/fork-organizations/tedb-electron-storage"
+    },
+    "publishConfig": {
+        "access": "public"
+    },
+    "author": "qiyangxy",
+    "license": "MIT",
+    "keywords": [
+        "typescript",
+        "embedded",
+        "tedb",
+        "TeDB",
+        "db",
+        "storage",
+        "driver",
+        "electron",
+        "node"
+    ],
+    "devDependencies": {
+        "@types/graceful-fs": "^4.1.5",
+        "@types/jest": "^29.5.12",
+        "@types/node": "^20.14.0",
+        "jest": "^29.7.0",
+        "tedb": "^0.4.4",
+        "ts-jest": "^29.2.2",
+        "typescript": "^5.5.4",
+        "vite": "^8.3.1",
+        "vite-plugin-dts": "^5.1.1"
+    },
+    "dependencies": {
+        "graceful-fs": "^4.2.11",
+        "tedb-utils": "^0.0.1"
+    },
+    "bugs": {
+        "url": "https://github.com/fork-organizations/tedb-electron-storage/issues"
+    },
+    "homepage": "https://github.com/fork-organizations/tedb-electron-storage#readme"
 }

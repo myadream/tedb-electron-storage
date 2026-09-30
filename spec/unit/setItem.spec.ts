@@ -12,12 +12,12 @@ describe('StorageDriver.setItem', () => {
         await teardownStorage(ctx);
     });
 
-    test('first write persists the document to both base and backup', async () => {
+    test('first write persists only the base file (backup comes with the first update)', async () => {
         const value = doc('k1', {name: 'alice'});
         const resolved = await ctx.storage.setItem('k1', value);
         expect(resolved).toEqual(value);
         expect(readJsonFile(baseFile(ctx, 'k1'))).toEqual(value);
-        expect(readJsonFile(pastFile(ctx, 'k1'))).toEqual(value);
+        expect(fileExists(pastFile(ctx, 'k1'))).toBe(false);
         expect(ctx.storage.allKeys).toContain('k1');
     });
 

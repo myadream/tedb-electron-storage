@@ -1,5 +1,5 @@
 import {IStorageDriverExtended} from '../types';
-import {UnlinkFile, removeBackup, safeReadFile} from '../utils';
+import {UnlinkFile, removeBackup, safeStat} from '../utils';
 const path = require('path');
 
 /**
@@ -30,9 +30,9 @@ export const RemoveIndex = (key: string, Storage: IStorageDriverExtended): Promi
     return new Promise((resolve, reject) => {
         const baseLocation = Storage.collectionPath;
         const fileLocation = path.join(baseLocation, Storage.version, 'states', `index_${key}`);
-        return safeReadFile(path.join(baseLocation, `index_${key}.db`))
-            .then((databool) => {
-                if (databool === false) {
+        return safeStat(path.join(baseLocation, `index_${key}.db`))
+            .then((statResult) => {
+                if (statResult === false) {
                     // base file does not exist remove backup
                     return removeBackup(fileLocation);
                 } else {

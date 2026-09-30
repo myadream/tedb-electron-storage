@@ -38,7 +38,13 @@ spec/
 ├── integration/tedbSmoke   the driver wired into the real `tedb` Database
 ├── concurrency/            concurrent writes, mixed read/write, parallel scans
 │                           and index operations (KeyedQueue + SafeWrite races)
-└── large/                  1k–100k-key scale: benchmarks, fsync cost, dedup
+└── large/                  1k–100k-key scale: correctness smoke, fsync cost,
+                            dedup; benchmarks (TEDB_LARGE_N sets the dataset
+                            size, e.g. 100000): benchSingleMethod times each
+                            operation class in isolation, benchLinked keeps
+                            add/update/remove/query in flight together on one
+                            live dataset with cross-round read-your-write
+                            verification (shared helpers: benchShared.ts)
 ```
 
 ## On-disk layout the recovery tests rely on
@@ -59,7 +65,11 @@ Recovery semantics every method must preserve:
   garbage backups; never resurrects data.
 - **setItem / storeIndex** — write-through: base always ends up holding the new
   payload; the backup holds the previous one (or the new one when the base was
-  missing).
+  missing). With `lazyBackup` (default on) a key's *first* write persists the
+  base file only and the backup appears with its first update — recovery then
+  takes the "no backup dir" branch for never-updated keys. Seeding fixtures
+  that need an existing backup must write twice (see `seedTwoIndexVersions` in
+  `recoveryMatrix.spec.ts`).
 
 ## Adding tests
 
@@ -81,4 +91,6 @@ Remaining red zones are race windows or unreachable combinations rather than
 untested features: files vanishing between a directory listing and the read
 (`Keys.ts` combo-read `read: false` paths), `RemoveDirectoryAndFile`'s
 "backup dir missing" arm (both files corrupted *and* the directory gone at
-once), and error-wrapper lines that need fault injection.
+once), error-wrapper lines that need fault injection, and the `SafeWrite`
+error path's best-effort `close(fd)` arm (a write/sync failure *after* the
+temp file opened — unreachable without mocking the fs layer).

@@ -1,5 +1,5 @@
 import {IStorageDriverExtended, TDurability} from '../types';
-import {SafeWrite, MakeVersionDirPast, stringifyJSON, CopyAndWrite, WriteNewPastandBase, safeReadFile, safeDirExists, MakeDir} from '../utils';
+import {SafeWrite, MakeVersionDirPast, stringifyJSON, CopyAndWrite, WriteNewPastandBase, safeStat, safeDirExists, MakeDir} from '../utils';
 const path = require('path');
 
 /**
@@ -8,19 +8,26 @@ const path = require('path');
  * @param {string} baseLocation
  * @param {string} data
  * @param returnMany
+ * @param {boolean} lazyBackup
+ * @param {TDurability} durability
  * @returns {Promise<any>}
  */
-const checkNext = (fileLocation: string, baseLocation: string, data: string, returnMany: any, durability: TDurability) => {
+const checkNext = (fileLocation: string, baseLocation: string, data: string, returnMany: any, lazyBackup: boolean, durability: TDurability) => {
     return new Promise((resolve, reject) => {
         return safeDirExists(fileLocation)
             .then((bool) => {
                 if (bool === false) {
-                    // no backup write data to both current and backup
+                    if (lazyBackup) {
+                        // first write of this key: persist the base file only,
+                        // the past copy appears with the first update
+                        return SafeWrite(baseLocation, data, durability);
+                    }
+                    // no backup dir: legacy behavior writes data to both current and backup
                     return MakeVersionDirPast(fileLocation, returnMany, data);
-                } else {
-                    // the backup directory exists
-                    return WriteNewPastandBase(fileLocation, returnMany, baseLocation, data, durability);
                 }
+                // the backup directory exists (this key was updated before):
+                // keep past in step with base so recovery always has a generation
+                return WriteNewPastandBase(fileLocation, returnMany, baseLocation, data, durability);
             })
             .then(resolve)
             .catch(reject);
@@ -85,12 +92,13 @@ export const SetItem = (key: string, value: any, Storage: IStorageDriverExtended
         return stringifyJSON(value)
             .then((data) => {
                 stringValue = data; // convert data to string to be written to files
-                return safeReadFile(path.join(baseLocation, `${key}.db`));
+                // existence probe only: stat instead of reading the whole file
+                return safeStat(path.join(baseLocation, `${key}.db`));
             })
-            .then((databool) => {
-                if (databool === false) {
+            .then((statResult) => {
+                if (statResult === false) {
                     // file to be written to does not exist. Check backup
-                    return checkNext(fileLocation, path.join(baseLocation, `${key}.db`), stringValue, returnMany, Storage.durability);
+                    return checkNext(fileLocation, path.join(baseLocation, `${key}.db`), stringValue, returnMany, Storage.lazyBackup, Storage.durability);
                 } else {
                     // file exists copy current file to backup location and write new data to current
                     return backupDirWrite(path.join(baseLocation, `${key}.db`), fileLocation, stringValue, Storage.durability);

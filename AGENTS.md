@@ -23,7 +23,7 @@ src/
 │   ├── Driver.ts             类定义 + per-key operationQueue 入口 + ensureDirs
 │   ├── SetItem/GetItem       写入 / 读取(含损坏自愈)
 │   ├── Exists.ts             非破坏性存在性探测(不复活数据)
-│   ├── Keys/Iterate          集合扫描(mapPool 限并发 32)
+│   ├── Keys/Iterate          集合扫描(mapPool 限并发 128)
 │   ├── StoreIndex/FetchIndex/RemoveIndex   索引持久化(文件名加 index_ 前缀)
 │   └── CollectionSanitize/Clear
 ├── utils/                fs 的 Promise 封装;SafeWrite(原子写)、KeyedQueue(串行化)、
@@ -43,6 +43,7 @@ src/
 ```
 
 - `version` 常量是 **`` `v0.0.1 ``(带前导反引号)**,是扫描过滤标记,不是包版本号,别"修正"它。
+- **lazyBackup 默认开(0.6.0)**:首写只落 base,`states/<key>/past` 由该 key 的**首次更新**创建;构造 `{lazyBackup: false}` 恢复旧的首写双写。已更新的 key 其 past 语义不变(past = 上一代)。
 - 集合扫描(`Keys`/`Iterate`/`CollectionSanitize`)只认 `*.db` 结尾且不含 `index_`、`` `v `` 的文件——SafeWrite 的临时文件名不含 `.db` 后缀正是为了被扫描忽略,改动命名时必须保持该性质。
 - `keys()` 的键取自**文件内容的 `_id`**,文件名只是初筛;返回值 = 磁盘扫描结果 ∪ 内存缓存。
 
@@ -50,7 +51,7 @@ src/
 
 1. **原子写**:所有落盘走 `SafeWrite`(临时文件 + fsync + rename;Windows rename 遇 EPERM/EACCES/EBUSY 指数退避重试)。绝不允许直接 truncate + write。
 2. **per-key 串行**:同一 key 的写/读/删经 `operationQueue.enqueue(key, ...)` 排队;`clear()` 先 `pending()` 排空再执行。恢复路径(读时自愈)会改文件,必须与在途写互斥。
-3. **恢复语义矩阵**:base 损坏/缺失 → 从 backup 复制还原;backup 也不可用 → 双删并 `untrackKey`。`Exists` 例外:只判定、只清理证明损坏的 backup,从不复活。索引的"空占位符" `[{"key":null,"value":[]}]` 由 `indexCheck` 识别,存空索引时不落 base 文件。
+3. **恢复语义矩阵**:base 损坏/缺失 → 从 backup 复制还原;backup 也不可用 → 双删并 `untrackKey`。lazyBackup(默认开)下首写无 backup,等价于"无备份目录"分支(丢弃 + untrack);base 缺失但**备份目录存在** → 仍双写新载荷。`Exists` 例外:只判定、只清理证明损坏的 backup,从不复活。索引的"空占位符" `[{"key":null,"value":[]}]` 由 `indexCheck` 识别,存空索引时不落 base 文件。
 4. **durability**:`'strict'`/`'relaxed'` 只影响 fsync;恢复写恒为 strict。
 5. **错误前缀**:所有 utils 的错误信息以 `:::Storage::: <方法名> Error. ` 开头,`safe*` 系列仅在 ENOENT 时 resolve(false),其余错误必须 reject(按 `err.code` 判断,勿用 `errno`,Windows 编号不同)。
 

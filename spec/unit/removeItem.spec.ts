@@ -33,6 +33,8 @@ describe('StorageDriver.removeItem', () => {
         const v2 = doc('k1', {round: 2});
         await ctx.storage.setItem('k1', v2);
         await expect(ctx.storage.getItem('k1')).resolves.toEqual(v2);
-        expect(fileExists(pastFile(ctx, 'k1'))).toBe(true);
+        // removeItem wiped the backup dir; the lazy re-insert writes base only
+        expect(fileExists(baseFile(ctx, 'k1'))).toBe(true);
+        expect(fileExists(pastFile(ctx, 'k1'))).toBe(false);
     });
 });

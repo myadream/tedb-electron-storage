@@ -25,6 +25,12 @@ const seedTwoVersions = async (ctx: ITestContext, key = 'k1') => {
     return {v1: doc(key, {v: 1}), v2: doc(key, {v: 2})};
 };
 
+/** two storeIndex calls so the backup dir + past file actually exist (lazyBackup writes base only on the first store) */
+const seedTwoIndexVersions = async (ctx: ITestContext, key = 'i1') => {
+    await ctx.storage.storeIndex(key, nonEmptyIndex());
+    await ctx.storage.storeIndex(key, nonEmptyIndex());
+};
+
 describe('recovery matrix — getItem', () => {
     let ctx: ITestContext;
     beforeEach(() => {
@@ -131,7 +137,7 @@ describe('recovery matrix — fetchIndex', () => {
     });
 
     test('base missing + backup dir exists but past gone -> null, dir removed', async () => {
-        await ctx.storage.storeIndex('i1', nonEmptyIndex());
+        await seedTwoIndexVersions(ctx);
         removePath(indexBaseFile(ctx, 'i1'));
         removePath(indexPastFile(ctx, 'i1'));
 
@@ -140,7 +146,7 @@ describe('recovery matrix — fetchIndex', () => {
     });
 
     test('base missing + past corrupted -> null, backup removed', async () => {
-        await ctx.storage.storeIndex('i1', nonEmptyIndex());
+        await seedTwoIndexVersions(ctx);
         removePath(indexBaseFile(ctx, 'i1'));
         corruptFile(indexPastFile(ctx, 'i1'));
 
@@ -149,7 +155,7 @@ describe('recovery matrix — fetchIndex', () => {
     });
 
     test('base missing + past holds the empty placeholder -> null, backup removed', async () => {
-        await ctx.storage.storeIndex('i1', nonEmptyIndex());
+        await seedTwoIndexVersions(ctx);
         removePath(indexBaseFile(ctx, 'i1'));
         writeRaw(indexPastFile(ctx, 'i1'), EMPTY_INDEX);
 
@@ -158,7 +164,7 @@ describe('recovery matrix — fetchIndex', () => {
     });
 
     test('base missing + non-empty past -> index restored into base and returned', async () => {
-        await ctx.storage.storeIndex('i1', nonEmptyIndex());
+        await seedTwoIndexVersions(ctx);
         removePath(indexBaseFile(ctx, 'i1'));
 
         const expected = JSON.parse(nonEmptyIndex());
@@ -176,7 +182,7 @@ describe('recovery matrix — fetchIndex', () => {
     });
 
     test('base corrupted + backup dir exists but past gone -> both removed', async () => {
-        await ctx.storage.storeIndex('i1', nonEmptyIndex());
+        await seedTwoIndexVersions(ctx);
         corruptFile(indexBaseFile(ctx, 'i1'));
         removePath(indexPastFile(ctx, 'i1'));
 
@@ -186,7 +192,7 @@ describe('recovery matrix — fetchIndex', () => {
     });
 
     test('base corrupted + past corrupted -> both removed', async () => {
-        await ctx.storage.storeIndex('i1', nonEmptyIndex());
+        await seedTwoIndexVersions(ctx);
         corruptFile(indexBaseFile(ctx, 'i1'));
         corruptFile(indexPastFile(ctx, 'i1'));
 
@@ -196,7 +202,7 @@ describe('recovery matrix — fetchIndex', () => {
     });
 
     test('base corrupted + past holds the empty placeholder -> both removed', async () => {
-        await ctx.storage.storeIndex('i1', nonEmptyIndex());
+        await seedTwoIndexVersions(ctx);
         corruptFile(indexBaseFile(ctx, 'i1'));
         writeRaw(indexPastFile(ctx, 'i1'), EMPTY_INDEX);
 
@@ -231,7 +237,7 @@ describe('recovery matrix — storeIndex directory branches', () => {
     });
 
     test('base missing + backup dir exists + storing empty -> only the backup rewritten', async () => {
-        await ctx.storage.storeIndex('i1', nonEmptyIndex());
+        await seedTwoIndexVersions(ctx);
         removePath(indexBaseFile(ctx, 'i1'));
 
         await ctx.storage.storeIndex('i1', EMPTY_INDEX);
@@ -240,13 +246,20 @@ describe('recovery matrix — storeIndex directory branches', () => {
     });
 
     test('base missing + backup dir exists + storing non-empty -> new payload in both', async () => {
-        await ctx.storage.storeIndex('i1', nonEmptyIndex(['id2']));
+        await seedTwoIndexVersions(ctx);
         removePath(indexBaseFile(ctx, 'i1'));
 
         const fresh = nonEmptyIndex(['id2', 'id3']);
         await ctx.storage.storeIndex('i1', fresh);
         expect(readJsonFile(indexBaseFile(ctx, 'i1'))).toEqual(JSON.parse(fresh));
         expect(readRawOrNull(indexPastFile(ctx, 'i1'))).toBe(fresh);
+    });
+
+    test('base missing + backup dir missing + storing non-empty (lazy first store) -> base only, no backup dir', async () => {
+        const fresh = nonEmptyIndex();
+        await ctx.storage.storeIndex('i1', fresh);
+        expect(readJsonFile(indexBaseFile(ctx, 'i1'))).toEqual(JSON.parse(fresh));
+        expect(fileExists(path.join(ctx.statesPath, 'index_i1'))).toBe(false);
     });
 });
 

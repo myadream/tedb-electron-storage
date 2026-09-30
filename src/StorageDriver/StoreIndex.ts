@@ -1,5 +1,5 @@
 import {IStorageDriverExtended, TDurability} from '../types';
-import {stringifyJSON, CopyAndWrite, SafeWrite, WriteNewPastandBase, MakeVersionDirPast, UnlinkFile, safeDirExists, MakeDir, safeReadFile} from '../utils';
+import {stringifyJSON, CopyAndWrite, SafeWrite, WriteNewPastandBase, MakeVersionDirPast, UnlinkFile, safeDirExists, MakeDir, safeStat} from '../utils';
 import {makeDirCopy, backupDirWrite} from './';
 const path = require('path');
 
@@ -70,10 +70,11 @@ export const StoreIndex = (key: string, index: string, Storage: IStorageDriverEx
         return stringifyJSON(index)
             .then((data) => {
                 stringIndex = data;
-                return safeReadFile(baseFile);
+                // existence probe only: stat instead of reading the whole index
+                return safeStat(baseFile);
             })
-            .then((dataBool) => {
-                if (dataBool !== false) {
+            .then((statResult) => {
+                if (statResult !== false) {
                     // base file exists
                     if (indexCheck(stringIndex)) {
                         // index is empty remove base and write to backup location
@@ -89,6 +90,11 @@ export const StoreIndex = (key: string, index: string, Storage: IStorageDriverEx
                             if (indexCheck(stringIndex)) {
                                 // neither backup nor base file exists and the index is empty
                                 return removeBaseWriteBackup(baseFile, fileLocation, stringIndex, Storage.durability);
+                            }
+                            if (Storage.lazyBackup) {
+                                // first store of this index: base only, backup
+                                // appears with the first update
+                                return SafeWrite(baseFile, stringIndex, Storage.durability);
                             }
                             // no base and no directory but the index is not empty:
                             // create backup dir and write data to both locations

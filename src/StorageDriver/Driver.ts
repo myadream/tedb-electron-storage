@@ -13,6 +13,7 @@ export class ElectronStorage implements IStorageDriverExtended {
     public collection: string;
     public dbName: string;
     public durability: TDurability;
+    public lazyBackup: boolean;
     public appDirectory: AppDirectory;
     public operationQueue: KeyedQueue;
 
@@ -23,7 +24,10 @@ export class ElectronStorage implements IStorageDriverExtended {
      *        OS user-data location (e.g. ~/AppData/Local/<db> on Windows)
      * @param {IElectronStorageOptions} [options] - `durability: 'strict'` (default)
      *        fsyncs every write; `'relaxed'` skips fsyncs but keeps atomic
-     *        renames — tear-free, faster, may lose the last writes on power loss
+     *        renames — tear-free, faster, may lose the last writes on power loss.
+     *        `lazyBackup` (default true) creates the past backup on a key's first
+     *        update instead of its first write; `false` restores the legacy
+     *        first-write-duplicates behavior
      */
     constructor(db: string, collection: string, dir?: string | null, options?: IElectronStorageOptions) {
         this.dbName = db;
@@ -31,6 +35,7 @@ export class ElectronStorage implements IStorageDriverExtended {
         this.appDirectory = new AppDirectory(db, dir == null ? null : dir);
         this.operationQueue = new KeyedQueue();
         this.durability = options?.durability ?? 'strict';
+        this.lazyBackup = options?.lazyBackup ?? true;
         this.allKeys = [];
         this.allKeysSet = new Set();
         this.collectionPath = '';

@@ -13,7 +13,7 @@ $ yarn add @qiyangxy/tedb-electron-storage
 ## Usage
 TeDB-Electron-Storage is a storage driver for [TeDB](https://github.com/tedb-org/teDB) that interacts with the base file system of Linux/Mac(OS)/Windows Desktop file systems to save and retrieve data. Together [TeDB](https://github.com/tedb-org/teDB) and this package make a MongoDB like database to save, retrieve, and edit data safely and quickly. This is a persist only storage driver meaning that the data does not live on in memory. It simply retrieves and returns data read from files off the files system.
 
-This storage driver also makes a backup of every file that is created so if for instance an error occurs during a write and the data file is lost there is a backup of its previous state. Every write is "crash proof" write, and should resist this possibility. This also goes for all indices that are persisted and saved.
+This storage driver makes a backup of every file it updates, so if for instance an error occurs during a write and the data file is lost there is a backup of its previous state. Backups are lazy: a key's *first* write persists only the data file, and the backup appears with that key's first update (`{lazyBackup: false}` restores the legacy behavior of duplicating every first write). Every write is a "crash proof" write, and should resist this possibility. This also goes for all indices that are persisted and saved.
 
 It is highly recommended to persist indices often. If not then a good way to remove errors of not having correct indices is to use the sanitize methods on [TeDB](https://github.com/tedb-org/teDB). These methods prevent indices to exist for files that do not exist and for files to not exist if they are not found in the indices. However these sanitize methods will do nothing if there is no index for the collection. 
 
@@ -94,6 +94,15 @@ new ElectronStorage(dbName, collectionName, dataDir, {durability: 'relaxed'});
 * **`'strict'` (default)** — every write fsyncs its temp file (and directory on POSIX) before the atomic rename. A confirmed write survives power loss.
 * **`'relaxed'`** — skips both fsyncs but keeps the atomic rename. Files can never tear or end up half-written; a power loss may drop the most recent writes (the same window the OS page cache already gives you). Measured on Windows: ~3× faster inserts, ~2× faster updates. Recovery writes (backup self-healing) always run strict.
 
+### Lazy backup (since 0.6.0)
+
+```typescript
+new ElectronStorage(dbName, collectionName, dataDir, {lazyBackup: false});
+```
+
+* **`lazyBackup: true` (default)** — a key's first write persists only the base file; the backup (`past`) is created by that key's first update. Inserts cost one atomic write instead of two, and append-heavy datasets keep roughly half the files on disk. A never-updated key has no backup, so losing its base file outside the atomic-write window drops the key on the next read (the same handling the driver always applied to keys without a backup directory).
+* **`lazyBackup: false`** — the legacy behavior: the very first write fills both base and backup.
+
 There you can query your data within that directory. A db for your application might look like 
 ```text
  > collectionName -> name of your db
@@ -119,7 +128,7 @@ There you can query your data within that directory. A db for your application m
       .   > otherCollections...    
 ``` 
 
-Now about why the version in the db directory is not the same as the package version. This is to possibly allow me to update the backup directories methodology without affecting your base data. If you update this package and see that the version number changed for that directory then there was a breaking change to how the data is laid out in the older version to the current. Items in the version directory are for the use of the database would recommend against tampering with the backup data. This does mean that your data is backup up and that your data is duplicated on disk. 
+Now about why the version in the db directory is not the same as the package version. This is to possibly allow me to update the backup directories methodology without affecting your base data. If you update this package and see that the version number changed for that directory then there was a breaking change to how the data is laid out in the older version to the current. Items in the version directory are for the use of the database would recommend against tampering with the backup data. Since 0.6.0 backups are lazy by default (base-only first writes; `{lazyBackup: false}` opts back into first-write duplication), so a collection that is written once and never updated keeps a single file per document.
 
 I might work in a way in the future to opt out of this choice but it is an extra safety measure for lost data when desktops randomly crash and there is not time to finish the current write. Write to files overwrite completely. This means every update will overwrite the file and the past info lives on in the backup until the next update. This package does make use of the graceful-fs as dependency preventing many common errors with file accessing. So if you notice that a find is taking a very long time possibly you have no index and a very large query with many many keys. This will open up many files if your collection is very large and will bottleneck the IO. Graceful-fs will convert the async nature of this package to synchronous if to many files are being opened at once. Having indices will prevent this from happening. 
 

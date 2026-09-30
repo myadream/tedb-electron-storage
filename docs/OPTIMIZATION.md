@@ -1,7 +1,8 @@
 # 优化分析报告（代码 + 业务）
 
 > 基于 0.3.0（修复 + 并发层之后）的代码。按"正确性优先、性能其次"排序；每项标注改动面与风险。
-> **状态更新（0.4.0）**：#1、#2、#4 已实施（见文末"已实施记录"）；其余仍为 backlog。
+> **状态更新（0.4.0）**：#1、#2、#4 已实施（见文末"已实施记录"）。
+> **状态更新（0.6.0）**：#6 已实施（默认开，`{lazyBackup: false}` 保留旧语义）；存在性探测 stat 化、SafeWrite 合并系统调用、removeBackup 瘦身、IO_LIMIT 32→128 一并落地。before/after 见文末"10 万数据集基线"。
 
 ## 总览
 
@@ -117,6 +118,43 @@ persist-only 设计下每次读都走磁盘。OS 页缓存已兜底，但高频�
 - 实测：10 万 key 已跟踪时 1000 次更新 4.95ms/op，与 2 个 key 时无差异——查重成本已不可测（原 indexOf 为每写 O(n) 字符串比较）。
 - 回归：`spec/unit/allKeys.spec.ts`（去重、删除、外部删除自愈、sanitize、clear 五个同步点）。
 
+## 已实施记录（0.6.0，2026-09-30）
+
+### #6 首写惰性备份 —— 已实施（默认开）
+
+- 构造选项 `{lazyBackup}`（默认 `true`）：首写只落 base，past 由该 key 首次更新创建；`false` 恢复旧首写双写。`StoreIndex` 非空首存同处理；空占位符语义不变。
+- "base 缺失但备份目录存在"恢复分支保持双写不变；never-updated key 的恢复走既有"无备份目录"分支（双删 + untrack）。
+- 回归：`spec/unit/lazyBackup.spec.ts`（两种模式矩阵）；`setItem`/`removeItem`/`index`/`recoveryMatrix` 首写断言同步更新（需要 past 的夹具改为种两代）。
+
+### 一并落地的写/读路径瘦身
+
+- **存在性探测 stat 化**：`SetItem`/`StoreIndex`/`RemoveItem`/`RemoveIndex` 判存在改 `safeStat`（ENOENT→false，其余错误 reject，语义与原全文读等价），每次写/删省一次整文件读。
+- **SafeWrite 合并系统调用**：单次 `open` 完成 write + fsync + close（旧流程经 `FlushStorage` 二次打开临时文件），POSIX strict 保留 rename 后目录 fsync，relaxed 行为不变。
+- **removeBackup 瘦身**：删备份目录不再先读 past（`UnlinkFile` 本就容忍 ENOENT）。
+- **IO_LIMIT 32→128**：keys/iterate/sanitize/clear 扫描并发提高；10 万文件全量扫描实测 < 5s。
+
 ## 业务侧（消费方）建议
 
 若此包被 obsidian-language-learner 采用作存储驱动：单词库 1~10 万条，"保存生词"是单条 setItem + 全量索引重写——建议 relaxed durability、导入用批量接口、索引只在关闭/定时持久化。自定义目录参数已支持 vault 内路径；Obsidian 桌面端 Node 环境可直用 graceful-fs。
+
+## 10 万数据集基线（2026-09-30，0.5.0 代码，spec/large 基准）
+
+`TEDB_LARGE_N=100000`，Windows/NTFS，strict durability，mapPool 64 并发。基准文件：`benchSingleMethod.spec.ts`（单方法隔离计时）、`benchLinked.spec.ts`（联动：10 轮 add/update/remove/query 交错混合负载 + 跨轮 read-your-write 断言），共享工具 `benchShared.ts`。
+
+| 相 | 单方法隔离 | 联动混合 |
+| --- | --- | --- |
+| insert 10 万条 | **665 s（150 op/s，6.65 ms/op，占套件 85%）** | 592 s（169 op/s） |
+| update 1 万条 | 29.4 s（340 op/s，2.94 ms/op） | 混合轮 1 万条，avg 253 ms/op\* |
+| remove 4 千条 | 7.5 s（534 op/s） | 混合轮 1 万条，avg 224 ms/op\* |
+| 点读 getItem | 1000 条 0.09 s（11.2k op/s） | 混合轮 1 万条，avg 74 ms/op\* |
+| keys()（缓存热路径） | 0.17 s | 每轮账目校验 |
+| iterate 全量扫描 | 8.7 s（11.6k op/s） | 8.6 s |
+| cleanup（clear+rmSync） | 64 s | 70 s |
+
+\* 联动混合的 avg ms/op 是 64 并发下**含排队等待**的单条延迟；混合吞吐看 wall：10 轮共 4 万 op 用时 120 s ≈ 334 op/s。
+
+结论：
+
+- **insert 是唯一的大头（~85%）**。首写双写 base+past（2 次 SafeWrite = 2 次 fsync + 1 次 mkdir），与 update 单写路径（CopyFile + 1 次 SafeWrite，2.94 ms/op）约 2.26 倍的差距与双写结构完全吻合 → **#6 首写惰性备份是杠杆最大的项**，插入路径预期 ~2×。
+- iterate / keys / 点读实测均非瓶颈（10 万文件全量扫描仅 ~9 s）；#3 的收益只剩冷启动 keys()。
+- 单套件 10 万规模总时长 ~13 min（insert ~11 min + 更新/删除/清理杂项）。

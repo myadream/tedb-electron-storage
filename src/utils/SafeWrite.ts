@@ -1,7 +1,7 @@
-import {FlushStorage, IFlushStorageOptions, WriteFile, RenameFile} from './index';
+import {FlushStorage, IFlushStorageOptions, RenameFile} from './index';
 import {KeyedQueue} from './KeyedQueue';
 import type {TDurability} from '../types';
-import {unlink} from 'graceful-fs';
+import {close, promises as fsp, unlink} from 'graceful-fs';
 const path = require('path');
 
 let tempCounter = 0;
@@ -29,40 +29,40 @@ const renameWithRetry = (from: string, to: string, attempts: number = 6, delay: 
     });
 };
 
-const atomicWrite = (filename: string, data: string | Buffer | Uint8Array, durability: TDurability): Promise<null> => {
-    return new Promise((resolve, reject) => {
-        const tempFile = `${filename}.tmp.${process.pid}.${tempCounter++}`;
-        const dirOptions: IFlushStorageOptions = {
-            filename: path.dirname(filename),
-            isDir: true,
-        };
-        const cleanupTemp = (): Promise<null> => {
-            return new Promise((res) => {
-                unlink(tempFile, () => res(null));
-            });
-        };
-        return WriteFile(tempFile, data)
-            .then(() => {
-                if (durability === 'relaxed') {
-                    // keep the atomic rename, skip both fsyncs — see TDurability
-                    return null;
-                }
-                return FlushStorage(tempFile);
-            })
-            .then(() => renameWithRetry(tempFile, filename))
-            .then(() => {
-                if (durability === 'relaxed') {
-                    return null;
-                }
-                return FlushStorage(dirOptions);
-            })
-            .then(resolve)
-            .catch((err) => {
-                return cleanupTemp().then((): void => {
-                    reject(new Error(':::Storage::: SafeWrite Error. ' + (err.message || err)));
-                });
-            });
-    });
+const atomicWrite = async (filename: string, data: string | Buffer | Uint8Array, durability: TDurability): Promise<null> => {
+    const tempFile = `${filename}.tmp.${process.pid}.${tempCounter++}`;
+    let fd: number | null = null;
+    try {
+        // one open serves write + fsync + close: the old flow reopened the
+        // temp file through FlushStorage just to fsync it
+        const handle = await fsp.open(tempFile, 'w', 0o666);
+        fd = handle.fd;
+        if (typeof data === 'string') {
+            await handle.write(data);
+        } else {
+            await handle.write(data as Buffer);
+        }
+        if (durability === 'strict') {
+            await handle.sync();
+        }
+        await handle.close();
+        fd = null;
+        await renameWithRetry(tempFile, filename);
+        if (durability === 'relaxed') {
+            // keep the atomic rename, skip the fsyncs — see TDurability
+            return null;
+        }
+        return await FlushStorage({filename: path.dirname(filename), isDir: true} as IFlushStorageOptions);
+    } catch (err: any) {
+        if (fd !== null) {
+            // best effort: the handle may already be closed if close() itself failed
+            await new Promise<void>((res) => close(fd as number, () => res()));
+        }
+        // leftover temp files never end in ".db", so scans ignore them —
+        // still, don't litter: remove our own
+        await new Promise<void>((res) => unlink(tempFile, () => res()));
+        throw new Error(':::Storage::: SafeWrite Error. ' + (err.message || err));
+    }
 };
 
 /**

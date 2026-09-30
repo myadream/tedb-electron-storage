@@ -1,5 +1,5 @@
 import {IStorageDriverExtended} from '../types';
-import {UnlinkFile, removeBackup, safeReadFile} from '../utils';
+import {UnlinkFile, removeBackup, safeStat} from '../utils';
 const path = require('path');
 
 /**
@@ -51,9 +51,9 @@ export const RemoveItem = (key: string, Storage: IStorageDriverExtended): Promis
     return new Promise((resolve, reject) => {
         const baseLocation = Storage.collectionPath;
         const fileLocation = path.join(baseLocation, Storage.version, 'states', key);
-        return safeReadFile(path.join(baseLocation, `${key}.db`))
-            .then((databool) => {
-                if (databool === false) {
+        return safeStat(path.join(baseLocation, `${key}.db`))
+            .then((statResult) => {
+                if (statResult === false) {
                     // base file does not exist
                     return doesNotExist(key, fileLocation, Storage);
                 } else {

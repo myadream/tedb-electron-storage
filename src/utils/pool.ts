@@ -3,8 +3,9 @@
  * (keys/iterate/sanitize/clear) may hold open at once. Without a bound,
  * scanning a large collection fires one read per file simultaneously and
  * can exhaust the process fd limit long before graceful-fs kicks in.
+ * 128 keeps a 100k-file scan fd-safe while hiding per-open latency.
  */
-export const IO_LIMIT = 32;
+export const IO_LIMIT = 128;
 
 /**
  * Array.map with a concurrency cap: at most `limit` invocations of `fn` are

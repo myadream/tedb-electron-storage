@@ -3,6 +3,41 @@
 All notable changes to this package are documented here. This fork keeps its
 own history on top of upstream `@qiyangxy/tedb-electron-storage`.
 
+## 0.6.0
+
+### Features
+
+- **Lazy backup (`lazyBackup`, default on)** — a key's first write persists
+  only the base file; the past backup is created by that key's first update.
+  Inserts cost one atomic write instead of two, and append-heavy datasets keep
+  roughly half the files on disk. `{lazyBackup: false}` restores the legacy
+  first-write duplication. Behavior note: a never-updated key has no backup, so
+  losing its base file outside the atomic-write window drops the key on the
+  next read — the same handling the driver always applied to keys without a
+  backup directory. The "base missing but backup directory exists" recovery
+  branch still writes both locations.
+- **Stat-based existence probes** — `setItem` / `storeIndex` / `removeItem` /
+  `removeIndex` no longer read the whole base file just to learn whether it
+  exists; they `stat` it, removing one full-file read per write.
+
+### Performance
+
+- **SafeWrite syscalls merged** — one `open` now serves write + fsync + close;
+  the old flow reopened the temp file through `FlushStorage` just to fsync it.
+- **removeBackup slimmed** — backup-dir cleanup no longer reads the past file
+  before unlinking it (`unlink` already tolerates ENOENT).
+- **Scan concurrency 32 → 128** (`IO_LIMIT`) — collection-wide scans
+  (`keys` / `iterate` / `collectionSanitize` / `clear`) hide more per-open
+  latency; a 100k-file full scan drops well under 5s on the reference machine.
+- 10 万数据集 before/after 基线（`spec/large/benchSingleMethod` /
+  `benchLinked`）见 [docs/OPTIMIZATION.md](docs/OPTIMIZATION.md)。
+
+### Tests
+
+- New `spec/unit/lazyBackup.spec.ts` pins both modes; `recoveryMatrix.spec.ts`
+  seeds fixtures that need a backup with two writes; first-write expectations
+  in `setItem` / `removeItem` / `index` specs updated to the lazy semantics.
+
 ## 0.5.0
 
 First version of this fork actually published to npm (upstream latest is

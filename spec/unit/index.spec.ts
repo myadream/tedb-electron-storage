@@ -13,11 +13,11 @@ describe('StorageDriver index persistence', () => {
         await teardownStorage(ctx);
     });
 
-    test('storeIndex persists the index to base and backup', async () => {
+    test('storeIndex persists the index to the base file (backup on update)', async () => {
         const payload = JSON.stringify([{key: 'a', value: ['id1', 'id2']}]);
         await ctx.storage.storeIndex('name', payload);
         expect(readJsonFile(indexBaseFile(ctx, 'name'))).toEqual([{key: 'a', value: ['id1', 'id2']}]);
-        expect(fileExists(indexPastFile(ctx, 'name'))).toBe(true);
+        expect(fileExists(indexPastFile(ctx, 'name'))).toBe(false);
     });
 
     test('fetchIndex returns the parsed index', async () => {
