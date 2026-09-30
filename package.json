@@ -1,6 +1,6 @@
 {
   "name": "@qiyangxy/tedb-electron-storage",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "TeDB storage driver for Electron using single file method per object in collection",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

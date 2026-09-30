@@ -3,6 +3,17 @@
 All notable changes to this package are documented here. This fork keeps its
 own history on top of upstream `@qiyangxy/tedb-electron-storage`.
 
+## 0.5.0
+
+First version of this fork actually published to npm (upstream latest is
+0.2.2). The intermediate 0.3.0 / 0.4.0 milestones below were never released
+separately — 0.5.0 ships their combined contents. See those sections for the
+full feature and fix list; everything else in this release:
+
+- Coverage raised to 97% statements / 91% branches (166 tests) with recovery
+  matrices for every driver method, and threshold-gated `pnpm test:coverage`.
+- Documentation set: `AGENTS.md`, `docs/TESTING.md`, refreshed README.
+
 ## 0.4.0
 
 ### Features

@@ -47,7 +47,7 @@ Since the use of this package is through [TeDB](https://github.com/tedb-org/teDB
 
 It is also important to know the limitations of this storage driver. Currently there is no insert buffer for inserting large amounts of documents. Since each document has its own file this takes time for the OS to create the files. To insert 10k items on my 2015 mac took 13 seconds. However all other operations on 100k collections took under 50ms even if there was no index. With indices however you will get results for a find/update/remove within 1-2ms depending on how many fields are searched. For each key in a query a search is a composed. Then cross referenced and compacted down to the remaining results. So the less keys in the query the faster the search.
 
-## Concurrency and crash safety (0.3.0)
+## Concurrency and crash safety (since 0.5.0)
 
 Since 0.3.0 the driver is safe under concurrent use and crash-safe on write:
 
@@ -56,7 +56,7 @@ Since 0.3.0 the driver is safe under concurrent use and crash-safe on write:
 * **Bounded scans** — `keys()`/`iterate()`/`collectionSanitize()`/`clear()` process files through a worker pool capped at 32 concurrent opens (`IO_LIMIT`), so a 100k-file collection cannot exhaust file descriptors.
 * **Cache validation** — `keys()` trusts its in-memory key cache only when the on-disk file names match it exactly (set comparison), falling back to a full recovery scan otherwise.
 
-Behavior changes to be aware of: reads/writes that hit real filesystem errors (EACCES, EISDIR, EPERM on delete, ...) now reject instead of being silently swallowed as "file missing"; `iterate` callbacks receive `(value, key)` — matching what tedb's Datastore actually expects (the type declaration was previously inverted); "no value" resolutions may be `null` where the interface declares `Promise<null>`; since 0.4.0 the backup copy (`CopyFile`) is a byte-exact kernel copy that **rejects on any IO error instead of silently skipping** — a backup always holds the exact previous generation of the file, corrupted bytes included — and key tracking keeps an O(1) `Set` mirror of `allKeys`.
+Behavior changes to be aware of: reads/writes that hit real filesystem errors (EACCES, EISDIR, EPERM on delete, ...) now reject instead of being silently swallowed as "file missing"; `iterate` callbacks receive `(value, key)` — matching what tedb's Datastore actually expects (the type declaration was previously inverted); "no value" resolutions may be `null` where the interface declares `Promise<null>`; the backup copy (`CopyFile`) is a byte-exact kernel copy that **rejects on any IO error instead of silently skipping** — a backup always holds the exact previous generation of the file, corrupted bytes included — and key tracking keeps an O(1) `Set` mirror of `allKeys`.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full data flow, on-disk layout and concurrency model.
 
@@ -83,7 +83,7 @@ As for the saving location on your desktop, you can check out the AppDirectory d
 * And for linux `user/.local/share/dbName`.
 * Or wherever you point it at by passing a custom directory as the third constructor argument: `new ElectronStorage(dbName, collectionName, dataDir)`.
 
-### Durability levels (0.4.0)
+### Durability levels (since 0.5.0)
 
 The fourth constructor argument tunes the crash-safety/performance trade-off of writes:
 
