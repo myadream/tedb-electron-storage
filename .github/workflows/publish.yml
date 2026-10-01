@@ -3,10 +3,14 @@ name: Publish to npm
 # 发布 @qiyangxy/tedb-electron-storage 到 npm：
 # - 推送 v* 标签触发（如 v0.6.0）
 # - 或在 Actions 页手动触发（workflow_dispatch）
-# 前置：仓库 Settings → Secrets and variables → Actions 配置 NPM_TOKEN
-#       npmjs.com 上以 @qiyangxy scope 发布权的账号生成 **Granular Access Token**：
-#       权限 Read-write 限定 @qiyangxy/tedb-electron-storage，
-#       2FA 选项选 bypass——账号开了"发布需 2FA"时，classic token / 无 OTP 发布会被 403 拦截
+#
+# 采用 npm **Trusted Publishing**（OIDC 可信发布，无 NPM_TOKEN secret）：
+# 前置一次性配置（npmjs.com 包设置页）：
+#   包 @qiyangxy/tedb-electron-storage → Settings → Trusted Publisher：
+#     Repository owner: myadream
+#     Repository name:  tedb-electron-storage
+#     Workflow filename: publish.yml   ← 必须与本文件名完全一致
+# 另需 npm CLI ≥ 11.5.1（工作流内已强制升级），GitHub 侧需 id-token: write 权限
 
 on:
   push:
@@ -14,11 +18,13 @@ on:
       - "v*"
   workflow_dispatch:
 
+permissions:
+  contents: read
+  id-token: write # npm Trusted Publishing（OIDC）必需
+
 jobs:
   publish:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -31,6 +37,10 @@ jobs:
           registry-url: "https://registry.npmjs.org"
           cache: pnpm
 
+      # Trusted Publishing 要求 npm ≥ 11.5.1，跑在旧版 npm 的 runner 上先升级
+      - name: Ensure npm supports trusted publishing
+        run: npm install -g npm@latest
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
@@ -38,8 +48,6 @@ jobs:
         run: pnpm build
 
       - name: Publish (skip if version already on npm)
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           VERSION=$(node -p "require('./package.json').version")
           if npm view "@qiyangxy/tedb-electron-storage@$VERSION" version >/dev/null 2>&1; then
