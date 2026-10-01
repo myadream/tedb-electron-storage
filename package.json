@@ -17,7 +17,7 @@
     },
     "repository": {
         "type": "git",
-        "url": "git+https://github.com/fork-organizations/tedb-electron-storage"
+        "url": "git+https://github.com/myadream/tedb-electron-storage.git"
     },
     "publishConfig": {
         "access": "public"
@@ -53,5 +53,5 @@
     "bugs": {
         "url": "https://github.com/fork-organizations/tedb-electron-storage/issues"
     },
-    "homepage": "https://github.com/fork-organizations/tedb-electron-storage#readme"
+    "homepage": "https://github.com/myadream/tedb-electron-storage#readme"
 }
