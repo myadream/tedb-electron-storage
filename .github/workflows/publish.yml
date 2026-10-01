@@ -1,0 +1,49 @@
+name: Publish to npm
+
+# 发布 @qiyangxy/tedb-electron-storage 到 npm：
+# - 推送 v* 标签触发（如 v0.6.0）
+# - 或在 Actions 页手动触发（workflow_dispatch）
+# 前置：仓库 Settings → Secrets and variables → Actions 配置 NPM_TOKEN
+#       npmjs.com 上以 @qiyangxy scope 发布权的账号生成 **Granular Access Token**：
+#       权限 Read-write 限定 @qiyangxy/tedb-electron-storage，
+#       2FA 选项选 bypass——账号开了"发布需 2FA"时，classic token / 无 OTP 发布会被 403 拦截
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      # packageManager 字段（pnpm@10）驱动版本，无需显式指定
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build dist
+        run: pnpm build
+
+      - name: Publish (skip if version already on npm)
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if npm view "@qiyangxy/tedb-electron-storage@$VERSION" version >/dev/null 2>&1; then
+            echo "Version $VERSION is already published — nothing to do"
+          else
+            npm publish --access public
+          fi
