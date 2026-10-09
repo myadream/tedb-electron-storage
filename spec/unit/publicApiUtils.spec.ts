@@ -8,8 +8,8 @@ import * as os from 'os';
 import * as path from 'path';
 import {
     AppendFile, ReadFile, WriteFile, FileStat, TruncateFile, safeStat,
-    EnsureDataFile, WriteNewPastandBase, safeParse, parseJSON, CopyAndWrite,
-    removeBackup, MakeDir, MakeVersionDirPast, FlushStorage, SafeWrite,
+    EnsureDataFile, safeParse, parseJSON, CopyAndWrite, ReadDir, safeDirExists,
+    MakeDir, FlushStorage, SafeWrite, RmDir,
     CloseFile, FileSync, LStat, OpenFile, safeReadFile,
 } from '../../src';
 
@@ -64,6 +64,8 @@ describe('public utils — raw file operations', () => {
             await WriteFile(f, 'one');
             await WriteFile(f, 'two', {encoding: 'utf8'}); // mode + flag fall back
             expect(fs.readFileSync(f, 'utf8')).toBe('two');
+            await WriteFile(f, 'three', {flag: 'w'}); // encoding + mode fall back
+            expect(fs.readFileSync(f, 'utf8')).toBe('three');
         });
 
         test('wraps write errors', async () => {
@@ -145,6 +147,22 @@ describe('public utils — raw file operations', () => {
             await expect(MakeDir(d)).rejects.toThrow(':::Storage::: MakeDir Error.');
         });
     });
+
+    describe('RmDir', () => {
+        test('removes an empty directory and tolerates a missing path', async () => {
+            const d = path.join(dir, 'a');
+            fs.mkdirSync(d);
+            await expect(RmDir(d)).resolves.toBeNull();
+            await expect(RmDir(d)).resolves.toBeNull(); // ENOENT tolerated
+        });
+
+        test('wraps real failures with its prefix (non-empty directory)', async () => {
+            const d = path.join(dir, 'b');
+            fs.mkdirSync(d);
+            fs.writeFileSync(path.join(d, 'f'), 'x', 'utf8');
+            await expect(RmDir(d)).rejects.toThrow(':::Storage::: RmDir Error.');
+        });
+    });
 });
 
 describe('public utils — composite helpers', () => {
@@ -171,41 +189,19 @@ describe('public utils — composite helpers', () => {
         });
     });
 
-    describe('WriteNewPastandBase', () => {
-        test('writes the same payload to past and base', async () => {
-            const sub = path.join(dir, 'states', 'k1');
-            fs.mkdirSync(sub, {recursive: true});
-            const base = path.join(dir, 'k1.db');
-            await WriteNewPastandBase(sub, null, base, '{"a":1}');
-            expect(fs.readFileSync(path.join(sub, 'past'), 'utf8')).toBe('{"a":1}');
-            expect(fs.readFileSync(base, 'utf8')).toBe('{"a":1}');
+    describe('ReadDir / safeDirExists', () => {
+        test('ReadDir lists entries and rejects for a missing directory', async () => {
+            fs.writeFileSync(path.join(dir, 'a'), 'x', 'utf8');
+            fs.mkdirSync(path.join(dir, 'sub'));
+            expect((await ReadDir(dir)).sort()).toEqual(['a', 'sub']);
+            await expect(ReadDir(path.join(dir, 'nope'))).rejects.toThrow(':::Storage::: ReadDir Error.');
         });
 
-        test('wraps failures with its prefix', async () => {
-            // base location sits inside a directory that does not exist
-            await expect(
-                WriteNewPastandBase(dir, null, path.join(dir, 'missing', 'k1.db'), '{}'),
-            ).rejects.toThrow(':::Storage::: WriteNewPastandBase Error.');
-        });
-    });
-
-    describe('MakeVersionDirPast', () => {
-        test('creates the directory then hands the payload to returnMany', async () => {
-            const sub = path.join(dir, 'states', 'k1');
-            fs.mkdirSync(path.join(dir, 'states')); // MakeDir is not recursive
-            const seen: string[] = [];
-            await MakeVersionDirPast(sub, (data: string) => {
-                seen.push(data);
-                return Promise.resolve(null);
-            }, 'payload');
-            expect(fs.existsSync(sub)).toBe(true);
-            expect(seen).toEqual(['payload']);
-        });
-
-        test('wraps MakeDir failures with its prefix', async () => {
-            await expect(
-                MakeVersionDirPast(path.join(dir, 'missing', 'k1'), () => Promise.resolve(null), 'x'),
-            ).rejects.toThrow(':::Storage::: MakeVersionDirPast Error.');
+        test('safeDirExists distinguishes existing dirs, files and missing paths', async () => {
+            fs.writeFileSync(path.join(dir, 'f'), 'x', 'utf8');
+            await expect(safeDirExists(dir)).resolves.toBe(true);
+            await expect(safeDirExists(path.join(dir, 'f'))).resolves.toBe(false); // a file is not a dir
+            await expect(safeDirExists(path.join(dir, 'nope'))).resolves.toBe(false);
         });
     });
 
@@ -225,40 +221,17 @@ describe('public utils — composite helpers', () => {
         });
     });
 
-    describe('removeBackup', () => {
-        test('is a no-op for a missing directory', async () => {
-            await expect(removeBackup(path.join(dir, 'nope'))).resolves.toBeNull();
-        });
-
-        test('removes dir and past file together', async () => {
-            const d = path.join(dir, 'k1');
-            fs.mkdirSync(d);
-            fs.writeFileSync(path.join(d, 'past'), '{}', 'utf8');
-            await removeBackup(d);
-            expect(fs.existsSync(d)).toBe(false);
-        });
-
-        test('removes the directory when the past file is already gone', async () => {
-            const d = path.join(dir, 'k1');
-            fs.mkdirSync(d);
-            await removeBackup(d);
-            expect(fs.existsSync(d)).toBe(false);
-        });
-
-        test('wraps failures with its prefix (non-empty dir keeps RmDir failing)', async () => {
-            const d = path.join(dir, 'k1');
-            fs.mkdirSync(d);
-            fs.writeFileSync(path.join(d, 'past'), '{}', 'utf8');
-            fs.writeFileSync(path.join(d, 'stray'), 'x', 'utf8');
-            await expect(removeBackup(d)).rejects.toThrow(':::Storage::: removeBackup Error.');
-        });
-    });
-
     describe('FlushStorage', () => {
         test('fsyncs an openable file', async () => {
             const f = path.join(dir, 'f');
             fs.writeFileSync(f, 'x', 'utf8');
             await expect(FlushStorage(f)).resolves.toBeNull();
+        });
+
+        test('fsyncs a file opened through the options object (isDir false)', async () => {
+            const f = path.join(dir, 'f');
+            fs.writeFileSync(f, 'x', 'utf8');
+            await expect(FlushStorage({filename: f, isDir: false})).resolves.toBeNull();
         });
 
         test('resolves null when the file cannot be opened (fd === false)', async () => {
@@ -280,6 +253,8 @@ describe('public utils — composite helpers', () => {
             const f = path.join(dir, 'f');
             fs.writeFileSync(f, 'hello', 'utf8');
             await expect(ReadFile(f, null as any, {encoding: 'utf8'})).resolves.toBe('hello');
+            // falsy encoding falls back to utf8, explicit flag is kept
+            await expect(ReadFile(f, null as any, {encoding: null, flag: 'r'})).resolves.toBe('hello');
         });
     });
 

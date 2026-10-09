@@ -1,6 +1,6 @@
 {
     "name": "@qiyangxy/tedb-electron-storage",
-    "version": "0.6.0",
+    "version": "0.8.0",
     "description": "TeDB storage driver for Electron using single file method per object in collection",
     "main": "dist/index.js",
     "types": "dist/index.d.ts",
@@ -47,8 +47,7 @@
         "vite-plugin-dts": "^5.1.1"
     },
     "dependencies": {
-        "graceful-fs": "^4.2.11",
-        "tedb-utils": "^0.0.1"
+        "graceful-fs": "^4.2.11"
     },
     "bugs": {
         "url": "https://github.com/fork-organizations/tedb-electron-storage/issues"

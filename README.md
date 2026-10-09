@@ -11,9 +11,9 @@ $ yarn add @qiyangxy/tedb-electron-storage
 ```
 
 ## Usage
-TeDB-Electron-Storage is a storage driver for [TeDB](https://github.com/tedb-org/teDB) that interacts with the base file system of Linux/Mac(OS)/Windows Desktop file systems to save and retrieve data. Together [TeDB](https://github.com/tedb-org/teDB) and this package make a MongoDB like database to save, retrieve, and edit data safely and quickly. This is a persist only storage driver meaning that the data does not live on in memory. It simply retrieves and returns data read from files off the files system.
+TeDB-Electron-Storage is a storage driver for [TeDB](https://github.com/tedb-org/teDB) that interacts with the base file system of Linux/Mac(OS)/Windows Desktop file systems to save and retrieve data. Together [TeDB](https://github.com/tedb-org/teDB) and this package make a MongoDB like database to save, retrieve, and edit data safely and quickly. This is a persist only storage driver meaning that the data does not live on in memory. It simply retrieves and returns data read from the segment log on the file system.
 
-This storage driver makes a backup of every file it updates, so if for instance an error occurs during a write and the data file is lost there is a backup of its previous state. Backups are lazy: a key's *first* write persists only the data file, and the backup appears with that key's first update (`{lazyBackup: false}` restores the legacy behavior of duplicating every first write). Every write is a "crash proof" write, and should resist this possibility. This also goes for all indices that are persisted and saved.
+Since 0.8.0 every collection is an **append-only segment log**: writes are one sequential append (group-committed fsync), the previous generation of every key stays in the log as its backup (no copy on update), and per-record CRCs make crash-torn tails and external corruption detectable and recoverable. This also goes for all indices that are persisted and saved.
 
 It is highly recommended to persist indices often. If not then a good way to remove errors of not having correct indices is to use the sanitize methods on [TeDB](https://github.com/tedb-org/teDB). These methods prevent indices to exist for files that do not exist and for files to not exist if they are not found in the indices. However these sanitize methods will do nothing if there is no index for the collection. 
 
@@ -22,12 +22,12 @@ Since this package relies highly on NodeJS's FS module much of the fs methods we
 ```typescript
 // ES6 options and available extensions
 import { IStorageDriverExtended, TiteratorCB, // from the types directory
-    GetItem, SetItem, Clear, FetchIndex, Iterate, Keys, RemoveItem, StoreIndex, RemoveIndex, ElectronStorage, indexCheck, // methods for the actual storage driver.
+    ElectronStorage, indexCheck, // the storage driver and index helper
     AppDirectory, IAppDirectory, // from the AppDirectory directory
 
     // below are all the functions used in the package as utilities
     // and FS replacements
-    TruncateFile, OpenFile, MakeDir, CopyFile, AppendFile, CloseFile, FileStat, FileSync, FlushStorage,  IFlushStorageOptions, WriteFile, ReadFile, SafeWrite, safeReadFile,  IsafeReadFileOptions, parseJSON, stringifyJSON, EnsureDataFile, UnlinkFile, ReadDir, RmDir, LStat, ClearDirectory, CopyAndWrite, WriteNewPastandBase, MakeVersionDirPast, safeParse, RenameFile, removeBackup, safeStat, safeDirExists, safeRmDir, KeyedQueue, mapPool, IO_LIMIT,
+    TruncateFile, OpenFile, MakeDir, CopyFile, AppendFile, CloseFile, FileStat, FileSync, FlushStorage,  IFlushStorageOptions, WriteFile, ReadFile, SafeWrite, safeReadFile,  IsafeReadFileOptions, parseJSON, stringifyJSON, EnsureDataFile, UnlinkFile, ReadDir, RmDir, LStat, CopyAndWrite, safeParse, RenameFile, safeStat, safeDirExists, KeyedQueue, mapPool, IO_LIMIT,
 } from 'tedb-electron-storage';
 ```
 Exports with the key term `safe` resolve `false` when a file is missing instead of rejecting; any other error (permissions, reading a directory, ...) rejects so callers can tell "missing" from "broken".
@@ -45,20 +45,16 @@ Exports with the key term `safe` resolve `false` when a file is missing instead 
 ## Storage Driver Upfront Info
 Since the use of this package is through [TeDB](https://github.com/tedb-org/teDB) then the explanation will be examples of using [TeDB](https://github.com/tedb-org/teDB) to create a meaningful api for your collections. This explanation will also be written in TypeScript; if you are using regular Javascript, nothing will change except possibly needing to downgrade the ES version to ES5 and removing the type annotations which come after a `:`.
 
-It is also important to know the limitations of this storage driver. Currently there is no insert buffer for inserting large amounts of documents. Since each document has its own file this takes time for the OS to create the files. To insert 10k items on my 2015 mac took 13 seconds. However all other operations on 100k collections took under 50ms even if there was no index. With indices however you will get results for a find/update/remove within 1-2ms depending on how many fields are searched. For each key in a query a search is a composed. Then cross referenced and compacted down to the remaining results. So the less keys in the query the faster the search.
+Writes are one sequential append to the active segment with a group-committed fsync — orders of magnitude cheaper than a file create + rename per document. Reads are an in-memory directory lookup plus one positioned read (CRC-verified), and `keys()`/`exists()` never touch the disk at all. Compaction reclaims space from overwritten generations automatically.
 
-## Concurrency and crash safety (since 0.5.0)
+## Concurrency and crash safety (0.8.0)
 
-Since 0.3.0 the driver is safe under concurrent use and crash-safe on write:
+* **Per-key serialization** — `setItem`/`getItem`/`removeItem` (and the index equivalents) targeting the same key run in submission order through an in-process queue; operations on different keys stay fully parallel. Recovery can therefore never race a concurrent write.
+* **Atomic visibility** — appends are serialized through the engine's write chain and a record only becomes visible through the in-memory key directory, so a reader never observes a torn record: CRCs catch crash-torn tails (truncated at startup) and externally corrupted bytes (repaired from the previous generation).
+* **Group commit** — strict durability shares one fsync across concurrent writers (2 ms window / 1 MiB / 256 ops triggers); relaxed durability bounds its loss window to ~1 s with a fallback fsync.
+* **Single-instance guard** — the manifest records the owning process; opening a collection held by a live other process is refused instead of corrupting the log.
 
-* **Atomic writes** — every write lands in a uniquely named temp file, is fsynced, then atomically renamed over the target. A crash mid-write can only leave an inert `*.tmp.*` file behind (ignored by all scans); documents are never observed truncated or empty. On Windows, renames retry with exponential backoff to ride out transient EPERM from antivirus software.
-* **Per-key serialization** — `setItem`/`getItem`/`removeItem` (and the index equivalents) targeting the same key run in submission order through an in-process queue; operations on different keys stay fully parallel. The destructive self-healing in read paths therefore can never race a concurrent write.
-* **Bounded scans** — `keys()`/`iterate()`/`collectionSanitize()`/`clear()` process files through a worker pool capped at 32 concurrent opens (`IO_LIMIT`), so a 100k-file collection cannot exhaust file descriptors.
-* **Cache validation** — `keys()` trusts its in-memory key cache only when the on-disk file names match it exactly (set comparison), falling back to a full recovery scan otherwise.
-
-Behavior changes to be aware of: reads/writes that hit real filesystem errors (EACCES, EISDIR, EPERM on delete, ...) now reject instead of being silently swallowed as "file missing"; `iterate` callbacks receive `(value, key)` — matching what tedb's Datastore actually expects (the type declaration was previously inverted); "no value" resolutions may be `null` where the interface declares `Promise<null>`; the backup copy (`CopyFile`) is a byte-exact kernel copy that **rejects on any IO error instead of silently skipping** — a backup always holds the exact previous generation of the file, corrupted bytes included — and key tracking keeps an O(1) `Set` mirror of `allKeys`.
-
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full data flow, on-disk layout and concurrency model.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full data flow, on-disk layout, recovery semantics and concurrency model.
 
 ## Building and testing
 
@@ -83,7 +79,7 @@ As for the saving location on your desktop, you can check out the AppDirectory d
 * And for linux `user/.local/share/dbName`.
 * Or wherever you point it at by passing a custom directory as the third constructor argument: `new ElectronStorage(dbName, collectionName, dataDir)`.
 
-### Durability levels (since 0.5.0)
+### Durability levels
 
 The fourth constructor argument tunes the crash-safety/performance trade-off of writes:
 
@@ -91,17 +87,17 @@ The fourth constructor argument tunes the crash-safety/performance trade-off of 
 new ElectronStorage(dbName, collectionName, dataDir, {durability: 'relaxed'});
 ```
 
-* **`'strict'` (default)** — every write fsyncs its temp file (and directory on POSIX) before the atomic rename. A confirmed write survives power loss.
-* **`'relaxed'`** — skips both fsyncs but keeps the atomic rename. Files can never tear or end up half-written; a power loss may drop the most recent writes (the same window the OS page cache already gives you). Measured on Windows: ~3× faster inserts, ~2× faster updates. Recovery writes (backup self-healing) always run strict.
+* **`'strict'` (default)** — writes are group-committed: concurrent writers share one fsync of the active segment (fired within 2 ms, or immediately at 1 MiB / 256 buffered ops). A write only resolves once its fsync has, so a confirmed write survives power loss.
+* **`'relaxed'`** — no per-write fsync; the active segment is still synced at least once per second, bounding the loss window to roughly one second. Records are CRC-checked either way, so a power loss can drop the last writes but never tear one.
 
-### Lazy backup (since 0.6.0)
+### Backup generations (logHistory)
 
 ```typescript
-new ElectronStorage(dbName, collectionName, dataDir, {lazyBackup: false});
+new ElectronStorage(dbName, collectionName, dataDir, {logHistory: 0});
 ```
 
-* **`lazyBackup: true` (default)** — a key's first write persists only the base file; the backup (`past`) is created by that key's first update. Inserts cost one atomic write instead of two, and append-heavy datasets keep roughly half the files on disk. A never-updated key has no backup, so losing its base file outside the atomic-write window drops the key on the next read (the same handling the driver always applied to keys without a backup directory).
-* **`lazyBackup: false`** — the legacy behavior: the very first write fills both base and backup.
+* **`logHistory: 1` (default)** — the log keeps the previous generation of every key, so a CRC-damaged current record is repaired from it on the next read.
+* **`logHistory: 0`** — only the current generation is kept across compaction: the least disk, but a damaged record means the key is gone.
 
 There you can query your data within that directory. A db for your application might look like 
 ```text
@@ -111,28 +107,17 @@ There you can query your data within that directory. A db for your application m
       .  | 
       .   > users -> collection you named and pushed data to
       .  .    | 
-      .  .     > username_index.db
-      .  .     > NW03UVRHQUJBQUE9T3IyT0xTK2FlaTQ9T2FOVEdxcE5lRG89aWowa0NLS3pVdWM9.db
-      .  .     > ... 
-      .  .     > `v0.0.1 -> version directory
+      .  .     > manifest.json -> segment list + owner pid + next generation
+      .  .     > segments
       .  .     .    |
-      .  .     .     > states -> another sub directory for version updates # note below about this
-      .  .     .    .    |
-      .  .     .    .     > NW03UVRHQUJBQUE9T3IyT0xTK2FlaTQ9T2FOVEdxcE5lRG89aWowa0NLS3pVdWM9 -> dir of backup of doc
-      .  .     .    .    .      |
-      .  .     .    .    .       > past -> file containing previous state of doc
-      .  .     .    .     > username_index -> dir of backup of index
-      .  .     .    .    .      |
-      .  .     .    .    .       > past -> file containing previous state of index
-      .  .     .    .     > otherBackups...
+      .  .     .     > seg-000001.log -> append-only record stream
+      .  .     .     > seg-000002.log -> rolled segment (sealed once full)
       .   > otherCollections...    
 ``` 
 
-Now about why the version in the db directory is not the same as the package version. This is to possibly allow me to update the backup directories methodology without affecting your base data. If you update this package and see that the version number changed for that directory then there was a breaking change to how the data is laid out in the older version to the current. Items in the version directory are for the use of the database would recommend against tampering with the backup data. Since 0.6.0 backups are lazy by default (base-only first writes; `{lazyBackup: false}` opts back into first-write duplication), so a collection that is written once and never updated keeps a single file per document.
+Every record inside a segment carries a CRC and a monotonically rising generation number. The memory key directory maps each key to its latest generation (and, with the default `logHistory: 1`, the previous one — that is the backup). Compaction rewrites the surviving generations into a fresh segment and retires the old ones, so the file count stays proportional to your data size rather than your write count.
 
-I might work in a way in the future to opt out of this choice but it is an extra safety measure for lost data when desktops randomly crash and there is not time to finish the current write. Write to files overwrite completely. This means every update will overwrite the file and the past info lives on in the backup until the next update. This package does make use of the graceful-fs as dependency preventing many common errors with file accessing. So if you notice that a find is taking a very long time possibly you have no index and a very large query with many many keys. This will open up many files if your collection is very large and will bottleneck the IO. Graceful-fs will convert the async nature of this package to synchronous if to many files are being opened at once. Having indices will prevent this from happening. 
-
-If you are wondering why the choice of singe files for documents was made for this package check out the information given in the parent package [TeDB writing a storage driver](https://github.com/tedb-org/teDB#writing-a-storage-driver-for-tedb).  
+This package makes use of graceful-fs to prevent many common errors with file accessing. If a find without an index over a very large collection feels slow, that is tedb scanning documents in memory — add an index for the fields you filter on.
 
 ## Using TeDB and TeDB-Electron-Storage in Tandem
 It is important to understand that [TeDB](https://github.com/tedb-org/teDB) is simply the in memory handler of the indices and _ids which are the keys to files in this package; and that TeDB-Electron-Storage is used for file IO operations. Using both together in certain circumstances and at the right time is key to creating a robust api for your DB. During development it is useful to have the Storage driver's methods available for debugging your DB. However it is not recommended unless completely confident in your ability to use the Storage Driver methods except for the `removeIndex` method.

@@ -3,6 +3,8 @@
 > 基于 0.3.0（修复 + 并发层之后）的代码。按"正确性优先、性能其次"排序；每项标注改动面与风险。
 > **状态更新（0.4.0）**：#1、#2、#4 已实施（见文末"已实施记录"）。
 > **状态更新（0.6.0）**：#6 已实施（默认开，`{lazyBackup: false}` 保留旧语义）；存在性探测 stat 化、SafeWrite 合并系统调用、removeBackup 瘦身、IO_LIMIT 32→128 一并落地。before/after 见文末"10 万数据集基线"。
+> **状态更新（0.7.0）**：备份布局扁平化（`states/<name>.past`，旧目录读时兼容、写时迁移）落地，消除 ext4 单目录 ~65000 子目录硬限制。
+> **状态更新（0.8.0）**：方案 D（日志结构存储引擎）**已实施并成为唯一引擎**——files 引擎与本文档中 #1–#6 所描述的 per-file 写路径已成为历史；行为契约见 [ARCHITECTURE.md](ARCHITECTURE.md)。本文其余部分保留作 files 引擎时代（≤ 0.7.0）的测量记录。
 
 ## 总览
 
@@ -118,6 +120,16 @@ persist-only 设计下每次读都走磁盘。OS 页缓存已兜底，但高频�
 - 实测：10 万 key 已跟踪时 1000 次更新 4.95ms/op，与 2 个 key 时无差异——查重成本已不可测（原 indexOf 为每写 O(n) 字符串比较）。
 - 回归：`spec/unit/allKeys.spec.ts`（去重、删除、外部删除自愈、sanitize、clear 五个同步点）。
 
+## 已实施记录（0.7.0，2026-10-09）
+
+### 备份布局扁平化 —— 已实施（含自动迁移）
+
+- 备份从 per-key 目录（`states/<key>/past`，0.6.0）改为扁平文件（`states/<key>.past`），路径逻辑集中在新模块 `utils/PastLocation.ts`（`findPastFile`/`readPastFile`/`writePast`/`copyBaseToPast`/`writePastAndBase`/`removeBackup`）。
+- **动机不是性能而是硬限制**：ext4（Linux）目录的子目录数上限 ≈65000（目录 nlink = 2 + 子目录数，`MakeDir` 报 EMLINK）——"每个被更新过的 key 一个目录"在 10 万级复习型负载（如背单词）下会撞墙。扁平化后 `states/` 只含文件，不再受限；每 key 的 inode 成本减半。
+- **兼容**：旧布局读时兼容（`findPastFile` 先探测扁平文件再回落旧目录），写时迁移（past 写成功后 `removeLegacyBackup` 递归删除旧目录，含崩溃残留的 SafeWrite tmp）。读路径不迁移。`Exists` 的"只判定、不复活"契约不变。
+- API 变更：删除 `MakeVersionDirPast`/`WriteNewPastandBase`/`safeRmDir`；`removeBackup` 改签名 `(statesDir, name)`。磁盘数据无需转换。
+- 回归：`spec/unit/pastMigration.spec.ts`（写时迁移、旧布局读回、扁平优先于旧目录、exists 不复活、keys 扫描恢复、索引迁移、lazyBackup:false 直写扁平）；`recoveryMatrix` 全矩阵在新布局下复跑。
+
 ## 已实施记录（0.6.0，2026-09-30）
 
 ### #6 首写惰性备份 —— 已实施（默认开）
@@ -178,3 +190,31 @@ persist-only 设计下每次读都走磁盘。OS 页缓存已兜底，但高频�
 注 2：单方法套件的 iterate 波动为运行噪声——同一次提交下联动套件 iterate 为 9.2 s（before 8.6 s，持平），且该提交只提高了扫描并发。
 
 剩余瓶颈：每写 1 次 fsync 的 NTFS 物理下限（strict）。进一步提速的现成选项是 relaxed durability（`benchDurability` 实测 ~3×）；更根本的是日志结构存储（backlog 之外的未来方向）。
+
+## 0.8.0 log 引擎基线（2026-10-09，0.8.0 代码，同机同盘 Windows/NTFS）
+
+测试条件与 0.6.0/0.7.0 files 基线一致：TEDB_LARGE_N=100000，strict durability，mapPool 64 并发，jest --runInBand。基准文件不变（benchSingleMethod / benchLinked / benchDurability），现在跑在段日志引擎上。
+
+| 相 | files 基线（0.6.0 after） | log 引擎（0.8.0） | 变化 |
+| --- | --- | --- | --- |
+| insert 10 万（单方法） | 468 s（214 op/s，4.68 ms/op） | **133.7 s（748 op/s，1.34 ms/op）** | **3.5×** |
+| 点读 1000 | 0.09 s（11.2k op/s） | 0.023 s（43.5k op/s） | 3.9× |
+| keys() | 0.17 s | 0.015 s | 11× |
+| iterate 全量 10 万 | 13.4 s | 7.2 s（13.9k op/s） | 1.9× |
+| update 1 万 | 63.5 s（157 op/s） | 22.7 s（441 op/s） | 2.8× |
+| remove 4 千 | 5.2 s（772 op/s） | 13.4 s（299 op/s） | **0.39×（回退，见注 1）** |
+| cleanup | 39 s | 0.024 s | **~1600×** |
+| **单方法套件合计** | **591 s** | **≈ 209 s** | **2.8×** |
+| 联动 insert 10 万 | 464 s（216 op/s） | 138.9 s（720 op/s） | 3.3× |
+| 联动混合 wall（4 万 op） | 122 s（334 op/s） | 75.0 s（533 op/s） | 1.6× |
+| 联动 cleanup | 30 s | 0.019 s | ~1500× |
+| **联动套件合计** | **626 s** | **≈ 213 s** | **2.9×** |
+
+联动混合逐类平均延迟（64 并发含排队）：add 158 / update 159 / remove 156 ms/op（files：253 / ~253 / 224），**query 0.50 ms/op（files 74）**——tedb 字段筛选逐候选 `exists` 变 keydir 纯内存查询后的结构性收益（约 150×）。
+
+benchDurability（单线程顺序写，N=1000，无并发可合并）：strict 3.13 ms/op（修复前 16.27，见注 2），relaxed 0.18 ms/op；10 万条 relaxed 顺序导入推算 ≈ 18 s。
+
+注 1：**remove 回退是语义成本**——files 的 remove 是 unlink（无 fsync）；log 的 remove = tombstone 追加 + 组提交 fsync（崩溃后删除才不复活）。绝对值 3.34 ms/op，占比小（4 千条 13.4 s）。
+注 2：**Windows 定时器钳制**——组提交的 2 ms 合并窗口最初用 setTimeout 实现，Windows 钳制到 ~15.6 ms，顺序 strict 写因此退化到 16.27 ms/op；已改为 ≤4 ms 窗口走 setImmediate 有界自旋（sync.ts `waitOut`），顺序写降至 3.13 ms/op（优于 files 顺序 strict 的 4.68）。并发下组提交系数仍低（748 op/s 接近 2 ms 窗口的串行上限，平均每次 sync 仅合并 ~1.5 条写），进一步提速需要调窗口/批量参数或改善同句柄 fsync 与 append 的交互——留作调参项。
+
+结论：段日志引擎在此负载下全面优于 files 引擎（除 remove 的语义性回退）；cleanup 与文件数 O(段数) 的收益是结构性的。设计阶段"insert 20–40 s"的乐观预测未达成（实际 134 s）——瓶颈是组提交在写链串行 + 同句柄 fsync 下的合并率，而非 append 本身。

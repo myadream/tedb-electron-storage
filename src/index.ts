@@ -1,5 +1,5 @@
 export type {IStorageDriverExtended, TiteratorCB, TDurability, IElectronStorageOptions} from './types';
-export {GetItem, SetItem, Clear, FetchIndex, Iterate, Keys, RemoveItem, StoreIndex, RemoveIndex, ElectronStorage, indexCheck} from './StorageDriver';
+export {ElectronStorage, indexCheck} from './StorageDriver';
 export {AppDirectory} from './AppDirectory';
 export type {IAppDirectory} from './AppDirectory';
 export {
@@ -23,16 +23,11 @@ export {
     ReadDir,
     RmDir,
     LStat,
-    ClearDirectory,
     CopyAndWrite,
-    WriteNewPastandBase,
-    MakeVersionDirPast,
-    safeParse,
     RenameFile,
-    removeBackup,
+    safeParse,
     safeStat,
     safeDirExists,
-    safeRmDir,
     KeyedQueue,
     mapPool,
     IO_LIMIT,

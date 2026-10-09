@@ -1,12 +1,2 @@
-export {GetItem} from './GetItem';
-export {SetItem, makeDirCopy, backupDirWrite} from './SetItem';
-export {Clear} from './Clear';
-export {FetchIndex} from './FetchIndex';
-export {Iterate} from './Iterate';
-export {Keys} from './Keys';
-export {RemoveItem} from './RemoveItem';
-export {StoreIndex, indexCheck} from './StoreIndex';
-export {RemoveIndex} from './RemoveIndex';
 export {ElectronStorage} from './Driver';
-export {CollectionSanitize} from './CollectionSanitize';
-export {Exists} from './Exists';
+export {indexCheck} from './IndexCheck';

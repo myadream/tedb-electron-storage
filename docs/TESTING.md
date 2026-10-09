@@ -1,12 +1,11 @@
 # Testing
 
-Four tiers under `spec/`, all runnable via [pnpm](https://pnpm.io):
+Suites under `spec/`, all runnable via [pnpm](https://pnpm.io):
 
 | Command | What it runs | When to use |
 | --- | --- | --- |
-| `pnpm test` | everything, including the ~60 s large suite | pre-release |
-| `pnpm test:coverage` | unit + integration + concurrency with coverage gates | every change |
-| `pnpm test:large` | `spec/large` only | durability/perf work |
+| `pnpm test` | everything, including the large suite | pre-release |
+| `pnpm test:coverage` | unit + concurrency + large-light with coverage gates | every change |
 | `pnpm typecheck` | `tsc --noEmit` | every change |
 
 `pnpm test:coverage` enforces thresholds in `jest.config.js` (statements 95,
@@ -18,58 +17,46 @@ the run.
 
 ```
 spec/
-├── helpers.ts              shared fixtures: isolated temp-dir storage, path
-│                           builders (baseFile/pastFile/index*File), corruption
-│                           and raw-write helpers, EMPTY_INDEX constant
-├── unit/                   driver methods against a real filesystem
-│   ├── setItem / getItem / removeItem / keys / iterate / allKeys
-│   ├── index.spec.ts           storeIndex/fetchIndex/removeIndex + indexCheck
-│   ├── existsSanitizeClear     exists, collectionSanitize, clear
-│   ├── durability.spec.ts      strict (fsync) vs relaxed durability modes
-│   ├── copyFile / utils        file utils, KeyedQueue, mapPool
-│   ├── existsRecovery.spec.ts  Exists() backup matrix (non-destructive probe)
-│   ├── recoveryMatrix.spec.ts  full (base × backup-dir × backup-file) matrix
-│   │                           across getItem/setItem/keys/iterate/
-│   │                           fetchIndex/storeIndex
-│   ├── publicApiUtils.spec.ts  utils exported from the package root that the
-│   │                           driver itself never calls
+├── helpers.ts              shared fixtures: isolated temp-dir storage, doc
+│                           builders, index payload constants, log layout
+│                           locators (logManifest / logSegmentsDir)
+├── unit/
+│   ├── logEngine/          the segment-log engine (ARCHITECTURE §2–§8):
+│   │   ├── logRecords.spec     record codec, CRC vectors, damage detection
+│   │   ├── logSync.spec        GroupSync coalescing / batch triggers
+│   │   ├── logCrud.spec        driver contract: CRUD, indexes, exists,
+│   │   │                       iterate, sanitize, clear, reopen, relaxed
+│   │   │                       durability, same-key concurrency
+│   │   ├── logRecovery.spec    golden truncation matrix, repair/promote/drop,
+│   │   │                       garbage tails, manifest rebuild, pid takeover,
+│   │   │                       orphan cleanup, repair-during-iterate
+│   │   └── logCompact.spec     rolling, history 0/1, promote-on-damage,
+│   │                           double-damage drop, forced compaction,
+│   │                           clear-during-compaction
+│   ├── copyFile.spec.ts        CopyFile util
+│   ├── utils.spec.ts           SafeWrite / KeyedQueue / mapPool / RmDir / parse utils
+│   ├── publicApiUtils.spec.ts  utils exported from the package root
 │   └── appDirectory.spec.ts    per-platform data-dir resolution (os.platform
 │                               mocked: darwin/win32/linux/fallback)
 ├── integration/tedbSmoke   the driver wired into the real `tedb` Database
-├── concurrency/            concurrent writes, mixed read/write, parallel scans
-│                           and index operations (KeyedQueue + SafeWrite races)
-└── large/                  1k–100k-key scale: correctness smoke, fsync cost,
-                            dedup; benchmarks (TEDB_LARGE_N sets the dataset
-                            size, e.g. 100000): benchSingleMethod times each
-                            operation class in isolation, benchLinked keeps
-                            add/update/remove/query in flight together on one
-                            live dataset with cross-round read-your-write
-                            verification (shared helpers: benchShared.ts)
+├── concurrency/            mixed concurrent reads/writes at the driver level
+└── large/                  1k–1000+-key scale: correctness smoke, fsync cost,
+                            benchmarks (TEDB_LARGE_N sets the dataset size):
+                            benchSingleMethod times each operation class in
+                            isolation, benchLinked keeps add/update/remove/
+                            query in flight together with cross-round
+                            read-your-write verification (benchShared.ts)
 ```
 
-## On-disk layout the recovery tests rely on
+## On-disk layout the tests rely on
 
 ```
-<collectionPath>/<key>.db                          current data ("base")
-<collectionPath>/`v0.0.1/states/<key>/past         previous data ("backup")
-<collectionPath>/index_<key>.db                    index base
-<collectionPath>/`v0.0.1/states/index_<key>/past   index backup
+<collectionPath>/manifest.json            segment list + pid + nextGen
+<collectionPath>/segments/seg-000001.log  append-only record stream
 ```
 
-Recovery semantics every method must preserve:
-
-- **getItem / fetchIndex / keys / iterate** — repair paths: if the base is
-  missing or unparsable, recover from the backup (copy it over the base); if
-  the backup is also gone or unparsable, delete both and untrack the key.
-- **exists** — non-destructive: answers the question and removes only provably
-  garbage backups; never resurrects data.
-- **setItem / storeIndex** — write-through: base always ends up holding the new
-  payload; the backup holds the previous one (or the new one when the base was
-  missing). With `lazyBackup` (default on) a key's *first* write persists the
-  base file only and the backup appears with its first update — recovery then
-  takes the "no backup dir" branch for never-updated keys. Seeding fixtures
-  that need an existing backup must write twice (see `seedTwoIndexVersions` in
-  `recoveryMatrix.spec.ts`).
+See [ARCHITECTURE.md §2–§8](ARCHITECTURE.md) for the record format and the
+recovery contract the log specs pin.
 
 ## Adding tests
 
@@ -77,20 +64,28 @@ Recovery semantics every method must preserve:
   every test in its own temp directory. Never construct `ElectronStorage`
   without the `dir` argument in tests: that would write into the real OS
   user-data directory.
-- For corruption scenarios use `corruptFile` / `writeRaw` / `removePath`; for
-  index payloads use the `EMPTY_INDEX` / `nonEmptyIndex()` constants — the
-  empty-index placeholder shape (`[{"key":null,"value":[]}]`) is load-bearing
-  for `indexCheck`.
-- New recovery branches belong in `recoveryMatrix.spec.ts`: seed two versions,
-  break exactly one thing on disk, then assert both the resolved value and the
-  resulting on-disk state.
+- Log-engine knobs make behavior deterministic: small `logSegMaxBytes` forces
+  rolling, `logCompactDeadRatio: 0` + `logCompactMinDeadBytes: 1` compacts on
+  every displaced generation. After a write that schedules a compaction, one
+  read (e.g. `getItem`) gates on it before you assert on-disk state.
+- Corruption is injected at record boundaries: read the segment file, decode
+  boundaries with `decodeRecordAt`, then flip the last byte of the target
+  record. Remember CRC damage does not change record lengths — the dead-byte
+  accounting cannot see it, so compaction tests need real displaced
+  generations to trigger.
+- Crash semantics belong in `logRecovery.spec.ts` (the golden truncation
+  matrix lives there); compaction semantics in `logCompact.spec.ts`.
+- For corruption scenarios use `writeRaw`/`removePath`; for index payloads use
+  the `EMPTY_INDEX` / `nonEmptyIndex()` constants — the empty-index
+  placeholder shape (`[{"key":null,"value":[]}]`) is load-bearing for
+  `indexCheck`.
 
 ## Known uncovered branches (accepted)
 
 Remaining red zones are race windows or unreachable combinations rather than
-untested features: files vanishing between a directory listing and the read
-(`Keys.ts` combo-read `read: false` paths), `RemoveDirectoryAndFile`'s
-"backup dir missing" arm (both files corrupted *and* the directory gone at
-once), error-wrapper lines that need fault injection, and the `SafeWrite`
-error path's best-effort `close(fd)` arm (a write/sync failure *after* the
-temp file opened — unreachable without mocking the fs layer).
+untested features: `scanSegment`'s non-`LogRecordError` rethrow (the decoder
+only throws that class), the write-chain failure swallow (append IO failures
+need fs fault injection), stale-entry read arms (a segment disappearing
+between keydir lookup and pread — impossible while compaction gates readers),
+`compact`'s abort-cleanup catch (needs an IO failure mid-copy), and
+`pidAlive`'s EPERM arm (another user's process).

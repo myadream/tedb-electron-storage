@@ -22,13 +22,25 @@ export type TDurability = 'strict' | 'relaxed';
 export interface IElectronStorageOptions {
     durability?: TDurability;
     /**
-     * First write of a key persists only the base file; the backup (past) is
-     * created by the first update of that key. Default true — inserts cost one
-     * atomic write instead of two. `false` restores the legacy behavior where
-     * the very first write already fills base + backup. Atomicity (temp file +
-     * rename) is unaffected either way.
+     * Roll the active segment once it reaches this size. Default 8 MiB.
      */
-    lazyBackup?: boolean;
+    logSegMaxBytes?: number;
+    /**
+     * Generations kept per key. 1 (default) keeps one previous generation as
+     * the backup ("past = the previous generation"); 0 keeps the current
+     * generation only — a damaged record then means the key is lost.
+     */
+    logHistory?: 0 | 1;
+    /**
+     * Compact when deadBytes/totalBytes reaches this ratio (and dead bytes
+     * exceed logCompactMinDeadBytes). Default 0.5. Compaction is also forced
+     * when the segment count passes 128.
+     */
+    logCompactDeadRatio?: number;
+    /**
+     * Minimum dead bytes before the ratio rule fires. Default 4 MiB.
+     */
+    logCompactMinDeadBytes?: number;
 }
 
 export interface IStorageDriverExtended extends IStorageDriver {
@@ -36,10 +48,7 @@ export interface IStorageDriverExtended extends IStorageDriver {
     allKeys: string[];
     /** Set mirror of allKeys — O(1) membership on the write hot path. */
     allKeysSet: Set<string>;
-    version: string;
     durability: TDurability;
-    /** See IElectronStorageOptions.lazyBackup. */
-    lazyBackup: boolean;
     /**
      * Per-key operation queue serializing reads/writes/removals targeting the
      * same key. Collection-wide scans use it to run their per-key recovery

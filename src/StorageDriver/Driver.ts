@@ -1,7 +1,7 @@
 import {IStorageDriverExtended, Iexist, Isanitize, TDurability, IElectronStorageOptions} from '../types';
-import {SetItem, GetItem, Clear, FetchIndex, Iterate, Keys, RemoveIndex, RemoveItem, StoreIndex, Exists, CollectionSanitize} from './index';
-import {KeyedQueue} from '../utils';
-import {mkdirSync} from 'graceful-fs';
+import {KeyedQueue, stringifyJSON} from '../utils';
+import {createEngine, IEngine} from '../Engine';
+import {indexCheck} from './IndexCheck';
 import {AppDirectory} from '../AppDirectory/index';
 const path = require('path');
 
@@ -9,25 +9,28 @@ export class ElectronStorage implements IStorageDriverExtended {
     public allKeys: string[];
     public allKeysSet: Set<string>;
     public collectionPath: string;
-    public version: string;
     public collection: string;
     public dbName: string;
     public durability: TDurability;
-    public lazyBackup: boolean;
     public appDirectory: AppDirectory;
     public operationQueue: KeyedQueue;
 
+    private readonly logSegMaxBytes?: number;
+    private readonly logHistory?: 0 | 1;
+    private readonly logCompactDeadRatio?: number;
+    private readonly logCompactMinDeadBytes?: number;
+    /** Lazily opened engine — opening scans segments and takes the pid lock. */
+    private engineP?: Promise<IEngine>;
+
     /**
      * @param {string} db - database name (top level directory under the data dir)
-     * @param {string} collection - collection name (sub directory of db)
      * @param {string} [dir] - optional custom data directory; defaults to the
      *        OS user-data location (e.g. ~/AppData/Local/<db> on Windows)
-     * @param {IElectronStorageOptions} [options] - `durability: 'strict'` (default)
-     *        fsyncs every write; `'relaxed'` skips fsyncs but keeps atomic
-     *        renames — tear-free, faster, may lose the last writes on power loss.
-     *        `lazyBackup` (default true) creates the past backup on a key's first
-     *        update instead of its first write; `false` restores the legacy
-     *        first-write-duplicates behavior
+     * @param {string} collection - collection name (sub directory of db)
+     * @param {IElectronStorageOptions} [options] - `durability: 'strict'`
+     *        (default) group-commits an fsync per confirmed write; `'relaxed'`
+     *        bounds the loss window to ~1 s with a fallback fsync. The
+     *        `log*` options tune the segment log (see IElectronStorageOptions).
      */
     constructor(db: string, collection: string, dir?: string | null, options?: IElectronStorageOptions) {
         this.dbName = db;
@@ -35,12 +38,30 @@ export class ElectronStorage implements IStorageDriverExtended {
         this.appDirectory = new AppDirectory(db, dir == null ? null : dir);
         this.operationQueue = new KeyedQueue();
         this.durability = options?.durability ?? 'strict';
-        this.lazyBackup = options?.lazyBackup ?? true;
+        this.logSegMaxBytes = options?.logSegMaxBytes;
+        this.logHistory = options?.logHistory;
+        this.logCompactDeadRatio = options?.logCompactDeadRatio;
+        this.logCompactMinDeadBytes = options?.logCompactMinDeadBytes;
         this.allKeys = [];
         this.allKeysSet = new Set();
-        this.collectionPath = '';
-        this.version = '';
-        this.ensureDirs();
+        this.collectionPath = path.join(this.appDirectory.userData(), 'db', this.collection);
+    }
+
+    /** Open (once) and hand the engine to the operation. */
+    private withEngine<T>(fn: (eng: IEngine) => T | PromiseLike<T>): Promise<T> {
+        if (!this.engineP) {
+            this.engineP = createEngine(this.collectionPath, {
+                durability: this.durability,
+                segMaxBytes: this.logSegMaxBytes,
+                history: this.logHistory,
+                compactDeadRatio: this.logCompactDeadRatio,
+                compactMinDeadBytes: this.logCompactMinDeadBytes,
+            }).catch((err) => {
+                this.engineP = undefined; // allow a retry (e.g. after the holder exited)
+                throw err;
+            });
+        }
+        return this.engineP.then(fn);
     }
 
     /**
@@ -55,7 +76,7 @@ export class ElectronStorage implements IStorageDriverExtended {
     }
 
     /**
-     * Drop a key after its files are gone. The Set guard makes repeats and
+     * Drop a key after its records are gone. The Set guard makes repeats and
      * never-tracked keys no-ops without rescanning the array.
      */
     public untrackKey(key: string): void {
@@ -67,70 +88,112 @@ export class ElectronStorage implements IStorageDriverExtended {
         }
     }
 
-    /**
-     * Create the on-disk skeleton for this collection. Safe to call again
-     * after clear() wiped the directory. `version` keeps its leading backtick
-     * on purpose: it is the on-disk layout marker that collection scans
-     * (Keys/Iterate/CollectionSanitize) filter on.
-     */
-    private ensureDirs(): void {
-        const userData = this.appDirectory.userData();
-        mkdirSync(userData, {recursive: true});
-        this.collectionPath = path.join(userData, 'db', this.collection);
-        this.version = '`v0.0.1';
-        mkdirSync(path.join(this.collectionPath, this.version, 'states'), {recursive: true});
-    }
-
     public setItem(key: string, value: any): Promise<any> {
-        return this.operationQueue.enqueue(key, () => SetItem(key, value, this));
+        return this.operationQueue.enqueue(key, () =>
+            stringifyJSON(value)
+                .then((raw) => this.withEngine((eng) => eng.setItem(key, raw)))
+                .then(() => {
+                    this.trackKey(key);
+                    return value;
+                }),
+        );
     }
 
     public getItem(key: string): Promise<any> {
-        return this.operationQueue.enqueue(key, () => GetItem(key, this));
+        return this.operationQueue.enqueue(key, () =>
+            this.withEngine((eng) => eng.getEntry(key)).then((res) => {
+                if (res === undefined) {
+                    this.untrackKey(key);
+                    return undefined;
+                }
+                return res.value;
+            }),
+        );
     }
 
     public removeItem(key: string): Promise<null> {
-        return this.operationQueue.enqueue(key, () => RemoveItem(key, this));
+        return this.operationQueue.enqueue(key, () =>
+            this.withEngine((eng) => eng.dropKey(key)).then(() => {
+                this.untrackKey(key);
+                return null;
+            }),
+        );
     }
 
     public storeIndex(key: string, index: string): Promise<any> {
-        return this.operationQueue.enqueue(`index_${key}`, () => StoreIndex(key, index, this));
+        return this.operationQueue.enqueue(`index_${key}`, () =>
+            stringifyJSON(index).then((raw) => this.withEngine((eng) => eng.setItem(`index_${key}`, raw))),
+        );
     }
 
     public fetchIndex(key: string): Promise<any[]> {
-        return this.operationQueue.enqueue(`index_${key}`, () => FetchIndex(key, this));
+        return this.operationQueue.enqueue(`index_${key}`, () =>
+            this.withEngine(async (eng) => {
+                const res = await eng.getEntry(`index_${key}`);
+                if (res === undefined) {
+                    return undefined;
+                }
+                // the empty-index placeholder is answered with null, matching
+                // the historical driver contract
+                return indexCheck(res.raw) ? null : res.value;
+            }),
+        );
     }
 
     public removeIndex(key: string): Promise<null> {
-        return this.operationQueue.enqueue(`index_${key}`, () => RemoveIndex(key, this));
+        return this.operationQueue.enqueue(`index_${key}`, () =>
+            this.withEngine((eng) => eng.dropKey(`index_${key}`)).then(() => null),
+        );
     }
 
     public iterate(iteratorCallback: (value: any, key: string, iteratorNumber?: number) => any): Promise<any> {
-        return Iterate(iteratorCallback, this);
+        return this.withEngine((eng) =>
+            eng.iterate(iteratorCallback, (key) => this.operationQueue.enqueue(key, () => eng.getEntry(key))),
+        );
     }
 
     public keys(): Promise<string[]> {
-        return Keys(this);
+        // the engine's key directory is the only truth — mirror it back
+        return this.withEngine((eng) => eng.keys()).then((keys) => {
+            this.allKeys = keys;
+            this.allKeysSet = new Set(keys);
+            return keys;
+        });
     }
 
     public exists(obj: Isanitize, index: any, fieldName: string): Promise<Iexist> {
-        return this.operationQueue.enqueue(String(obj.value), () => Exists(obj, index, fieldName, this));
+        return this.operationQueue.enqueue(String(obj.value), () =>
+            // zero-IO engine probe; corruption handling lives on the read path
+            this.withEngine(async (eng) => ({
+                key: obj.key,
+                value: obj.value,
+                doesExist: eng.has(String(obj.value)),
+                index,
+                fieldName,
+            })),
+        );
     }
 
     public collectionSanitize(keys: string[]): Promise<null> {
-        return CollectionSanitize(keys, this);
+        // no orphan files exist; keys tedb does not know are dropped outright
+        return this.withEngine((eng) =>
+            eng.collectionSanitize(keys, (key) =>
+                this.operationQueue.enqueue(key, () => eng.dropKey(key)).then(() => {
+                    this.untrackKey(key);
+                }),
+            ),
+        );
     }
 
     public clear(): Promise<null> {
-        // barrier: let in-flight per-key work finish before wiping the tree,
-        // then recreate the skeleton so the instance stays usable afterwards.
-        return this.operationQueue.pending()
-            .then(() => Clear(this))
-            .then(() => {
-                this.allKeys = [];
-                this.allKeysSet = new Set();
-                this.ensureDirs();
-                return null;
-            });
+        // barrier: let in-flight per-key work finish before wiping the state,
+        // then keep the instance usable afterwards.
+        return this.operationQueue.pending().then(() =>
+            this.withEngine((eng) => eng.clear()),
+        ).then(() => {
+            this.allKeys = [];
+            this.allKeysSet = new Set();
+            return null;
+        });
     }
 }
