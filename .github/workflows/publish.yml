@@ -3,6 +3,8 @@ name: Publish to npm
 # 发布 @qiyangxy/tedb-electron-storage 到 npm：
 # - 推送 v* 标签触发（如 v0.6.0）
 # - 或在 Actions 页手动触发（workflow_dispatch）
+# npm 发布成功后自动创建 GitHub Release，说明取自 CHANGELOG.md 对应版本小节
+# （.github/extract-changelog.cjs 提取；无对应小节时回退为 CHANGELOG 链接）
 #
 # 采用 npm **Trusted Publishing**（OIDC 可信发布，无 NPM_TOKEN secret）：
 # 前置一次性配置（npmjs.com 包设置页）：
@@ -19,7 +21,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write # 创建 GitHub Release 必需
   id-token: write # npm Trusted Publishing（OIDC）必需
 
 jobs:
@@ -55,3 +57,30 @@ jobs:
           else
             npm publish --access public
           fi
+
+  # 仅标签触发时执行：npm 发布成功后创建同名 GitHub Release
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract release notes from CHANGELOG
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if node .github/extract-changelog.cjs "${TAG#v}" > RELEASE_BODY.md; then
+            echo "Extracted CHANGELOG section for ${TAG}"
+          else
+            echo "No CHANGELOG section for ${TAG} — falling back to link"
+            echo "See [CHANGELOG.md](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/blob/${TAG}/CHANGELOG.md)." > RELEASE_BODY.md
+          fi
+
+      # 已存在同名 Release（重跑/重推标签）时改为更新其标题与说明
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          gh release create "$TAG" --title "$TAG" --notes-file RELEASE_BODY.md ||
+            gh release edit "$TAG" --title "$TAG" --notes-file RELEASE_BODY.md
